@@ -2,7 +2,7 @@
 # Contributor: Crush <crush@ccat.dev>
 
 pkgname=ccat-rs
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Enhanced cat tool — auto-detect and display markdown, docx, images, and gz files"
 arch=('x86_64' 'aarch64')
@@ -11,7 +11,7 @@ license=('MIT')
 depends=('gcc-libs' 'oniguruma')
 makedepends=('cargo' 'pkg-config')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/zhiyuHD/ccat/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
-sha256sums=('ceb0bf1a366b3d391127c9a8bb54e88ddf2641020a58a858c58209d7dab98fcd')
+sha256sums=('8040feff7e6a75f99ab466dc147fd71b1b18a01c126b905126c97a785d59041d')
 
 build() {
   cd "$srcdir/$pkgname-$pkgver"
