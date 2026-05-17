@@ -48,7 +48,7 @@ console = "0.16"
 pdf-extract = "0.8"
 
 # Archive listing
-zip = "0.6"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 tar = "0.4"
 
 # Audio/Video metadata
