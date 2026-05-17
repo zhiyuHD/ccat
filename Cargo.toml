@@ -39,3 +39,20 @@ object = "0.39"
 
 # x86/x86_64 disassembly
 iced-x86 = "1.21"
+
+# Diff computation and ANSI output
+similar = "3"
+console = "0.16"
+
+# PDF text extraction
+pdf-extract = "0.8"
+
+# Archive listing
+zip = "0.6"
+tar = "0.4"
+
+# Audio/Video metadata
+lofty = "0.24"
+
+# Lightweight regex for sed substitution
+regex-lite = "0.1"

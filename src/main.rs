@@ -10,17 +10,25 @@ mod cat_markdown;
 mod cat_docx;
 mod cat_image;
 mod cat_disasm;
+mod cat_diff;
+mod cat_pdf;
+mod cat_archive;
+mod cat_media;
 mod pager;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
 
 /// ccat - An enhanced cat tool with automatic file type detection
 #[derive(Parser)]
-#[command(name = "ccat", version, about = "Enhanced cat: auto-detect and display markdown, docx, images, and gz files")]
+#[command(name = "ccat", version, about = "Enhanced cat: auto-detect and display markdown, docx, images, gz, diff, and disassemble ELF")]
 struct Cli {
     /// File(s) to display (or use - to read stdin). When a directory is given,
     /// shows a summary similar to `file`.
     files: Vec<String>,
+
+    /// Diff mode: compare two files (like `diff`)
+    #[arg(short = 'D', long = "diff", num_args = 2, value_names = ["file1", "file2"])]
+    diff: Option<Vec<String>>,
 
     /// Force plain text output
     #[arg(short = 'A', long = "ascii")]
@@ -33,6 +41,22 @@ struct Cli {
     /// Show detected file type (like `file` command)
     #[arg(short = 'T', long = "type")]
     show_type: bool,
+
+    /// Number lines (-n: all, -b: non-blank)
+    #[arg(short = 'n', long = "number", conflicts_with = "number_nonblank")]
+    number: bool,
+
+    /// Number non-blank lines
+    #[arg(short = 'b', long = "number-nonblank", conflicts_with = "number")]
+    number_nonblank: bool,
+
+    /// Squeeze consecutive blank lines into one
+    #[arg(short = 's', long = "squeeze-blank")]
+    squeeze_blank: bool,
+
+    /// Apply sed-like substitution (e.g. s/foo/bar/)
+    #[arg(short = 'e', long = "edit", value_name = "expression")]
+    edit: Option<String>,
 }
 
 enum FileKind {
@@ -40,6 +64,9 @@ enum FileKind {
     Docx,
     Gzip,
     Image,
+    Pdf,
+    Archive,
+    Media,
     PlainText,
 }
 
@@ -47,15 +74,22 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
     // Infer by magic bytes
     match infer::get(data) {
         Some(kind) => match kind.mime_type() {
-            "application/gzip" => return FileKind::Gzip,
+            "application/gzip" => {
+                // Check if it's a tar.gz by extension
+                return FileKind::Gzip;
+            }
             "application/zip" => {
-                // .docx files are zips with specific internal structure
                 if path.extension().and_then(|e| e.to_str()) == Some("docx") {
                     return FileKind::Docx;
                 }
+                return FileKind::Archive;
             }
+            "application/pdf" => return FileKind::Pdf,
             "image/png" | "image/jpeg" | "image/gif" | "image/webp"
             | "image/bmp" | "image/tiff" => return FileKind::Image,
+            "audio/mpeg" | "audio/flac" | "audio/ogg" | "audio/wav"
+            | "audio/aac" | "audio/mp4" | "video/mp4" | "video/x-matroska"
+            | "video/webm" | "audio/x-m4a" => return FileKind::Media,
             _ => {}
         },
         None => {}
@@ -70,11 +104,16 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" => {
                 return FileKind::Image;
             }
+            "pdf" => return FileKind::Pdf,
+            "zip" | "tar" | "tgz" | "tbz2" | "xz" | "bz2" => return FileKind::Archive,
+            "mp3" | "flac" | "ogg" | "wav" | "aac" | "m4a" | "mp4" | "mkv" | "webm" | "opus" => {
+                return FileKind::Media;
+            }
             _ => {}
         }
     }
 
-    // Check if it looks like markdown (starts with common markdown syntax)
+    // Check if it looks like markdown
     if looks_like_markdown(data) {
         return FileKind::Markdown;
     }
@@ -190,6 +229,15 @@ fn readable_file_kind(mime: &str, path: &Path) -> String {
         "application/x-sharedlib" => "ELF shared library".into(),
         "application/x-executable" => "ELF executable".into(),
         "inode/symlink" => "symbolic link".into(),
+        "audio/mpeg" => "MP3 audio".into(),
+        "audio/flac" => "FLAC audio".into(),
+        "audio/ogg" => "OGG audio".into(),
+        "audio/wav" => "WAV audio".into(),
+        "audio/aac" => "AAC audio".into(),
+        "audio/mp4" | "audio/x-m4a" => "M4A audio".into(),
+        "video/mp4" => "MP4 video".into(),
+        "video/x-matroska" => "MKV video".into(),
+        "video/webm" => "WebM video".into(),
         _ => mime.into(),
     }
 }
@@ -336,6 +384,64 @@ fn cat_plain(data: &[u8]) {
     print!("{s}");
 }
 
+fn cat_plain_with_opts(data: &[u8], number: bool, number_nonblank: bool, squeeze: bool, edit: Option<&str>) {
+    let s = String::from_utf8_lossy(data);
+    let mut lines: Vec<&str> = s.lines().collect();
+
+    // Squeeze consecutive blank lines
+    if squeeze {
+        let mut squeezed = Vec::new();
+        let mut prev_blank = false;
+        for line in &lines {
+            let blank = line.trim().is_empty();
+            if blank && prev_blank {
+                continue;
+            }
+            squeezed.push(*line);
+            prev_blank = blank;
+        }
+        lines = squeezed;
+    }
+
+    // Sed-like substitution
+    let re = edit.and_then(|expr| {
+        let parts: Vec<&str> = expr.split('/').collect();
+        if parts.len() >= 3 && parts[0] == "s" {
+            let pattern = parts[1];
+            let replacement = parts[2];
+            regex_lite::Regex::new(pattern).ok().map(|r| (r, replacement.to_string()))
+        } else {
+            None
+        }
+    });
+
+    // Output
+    let mut line_num = 0u64;
+    for line in &lines {
+        let blank = line.trim().is_empty();
+
+        // Determine output text after substitution
+        let output = if let Some((ref re, ref replacement)) = re {
+            re.replace(line, replacement.as_str()).to_string()
+        } else {
+            line.to_string()
+        };
+
+        // Line number
+        if number {
+            line_num += 1;
+            println!("{:6}\t{output}", line_num);
+        } else if number_nonblank && !blank {
+            line_num += 1;
+            println!("{:6}\t{output}", line_num);
+        } else if number_nonblank && blank {
+            println!("       \t{output}");
+        } else {
+            println!("{output}");
+        }
+    }
+}
+
 fn cat_gz(data: &[u8]) {
     let mut decoder = GzDecoder::new(data);
     let mut buf = Vec::new();
@@ -350,7 +456,7 @@ fn cat_gz(data: &[u8]) {
     }
 }
 
-fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool) -> io::Result<()> {
+fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, has_opts: bool, number: bool, number_nonblank: bool, squeeze: bool, edit: Option<&str>) -> io::Result<()> {
     let path_obj = Path::new(path);
 
     // If it's a directory, show file-like summary for each entry
@@ -417,6 +523,9 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool) 
         FileKind::Docx => cat_docx::cat_docx(&data),
         FileKind::Gzip => cat_gz(&data),
         FileKind::Image => cat_image::cat_image(&data),
+        FileKind::Pdf => cat_pdf::cat_pdf(&data),
+        FileKind::Archive => cat_archive::cat_archive(&data, path),
+        FileKind::Media => cat_media::cat_media(&data),
         FileKind::PlainText => {
             if is_binary(&data) {
                 if !show_type {
@@ -439,7 +548,11 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool) 
                     }
                 }
             } else {
-                cat_plain(&data);
+                if has_opts {
+                    cat_plain_with_opts(&data, number, number_nonblank, squeeze, edit);
+                } else {
+                    cat_plain(&data);
+                }
             }
         }
     }
@@ -449,6 +562,34 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool) 
 
 fn main() {
     let cli = Cli::parse();
+
+    let _force_ascii = cli.ascii;
+    let _force_binary = cli.binary;
+    let _show_type = cli.show_type;
+    let number = cli.number;
+    let number_nonblank = cli.number_nonblank;
+    let squeeze = cli.squeeze_blank;
+    let edit = cli.edit.as_deref();
+
+    // Processing flags apply to plain text output
+    let has_opts = number || number_nonblank || squeeze || edit.is_some();
+
+    // Diff mode
+    if let Some(paths) = cli.diff {
+        if paths.len() != 2 {
+            eprintln!("ccat: diff requires exactly 2 files");
+            return;
+        }
+        let data = match fs::read(&paths[0]) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("ccat: {}: {e}", paths[0]);
+                return;
+            }
+        };
+        cat_diff::cat_diff(&data, &paths[0], &paths[1]);
+        return;
+    }
 
     if cli.files.is_empty() {
         // Read from stdin
@@ -482,6 +623,9 @@ fn main() {
                 FileKind::Docx => cat_docx::cat_docx(&buf),
                 FileKind::Gzip => cat_gz(&buf),
                 FileKind::Image => cat_image::cat_image(&buf),
+                FileKind::Pdf => cat_pdf::cat_pdf(&buf),
+                FileKind::Archive => cat_archive::cat_archive(&buf, "stdin"),
+                FileKind::Media => cat_media::cat_media(&buf),
                 FileKind::PlainText => {
                     if is_binary(&buf) {
                         if !show_type {
@@ -500,7 +644,7 @@ fn main() {
         if i > 0 {
             println!();
         }
-        if let Err(e) = cat_file(file, cli.ascii, cli.binary, cli.show_type) {
+        if let Err(e) = cat_file(file, cli.ascii, cli.binary, cli.show_type, has_opts, number, number_nonblank, squeeze, edit) {
             if e.kind() != io::ErrorKind::Other {
                 // We already printed the error in cat_file
             }
