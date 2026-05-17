@@ -44,8 +44,8 @@ iced-x86 = "1.21"
 similar = "3"
 console = "0.16"
 
-# PDF text extraction
-pdf-extract = "0.8"
+# PDF text extraction — use lopdf directly (more reliable than pdf-extract)
+lopdf = "0.34"
 
 # Archive listing
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
