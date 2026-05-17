@@ -10,6 +10,7 @@ mod cat_markdown;
 mod cat_docx;
 mod cat_image;
 mod cat_disasm;
+mod pager;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
 
@@ -258,17 +259,18 @@ pub fn cat_hex(data: &[u8]) {
     let mut stdout = io::stdout();
     let columns = 16;
     let lines = data.len().div_ceil(columns);
-    let page_size = 24; // lines per page
-    let total_pages = lines.div_ceil(page_size);
+    let (term_height, _) = pager::terminal_size();
+    let page_lines = term_height.saturating_sub(2).max(5);
+    let total_pages = lines.div_ceil(page_lines);
     let mut current_page: usize = 0;
 
     loop {
-        let start = current_page * page_size * columns;
-        let end = ((current_page + 1) * page_size * columns).min(data.len());
-        let chunk = &data[start..end];
+        let start_line = current_page * page_lines;
+        let end_line = (start_line + page_lines).min(lines);
 
-        for (row_idx, row) in chunk.chunks(columns).enumerate() {
-            let offset = start + row_idx * columns;
+        for line_idx in start_line..end_line {
+            let offset = line_idx * columns;
+            let row = &data[offset..data.len().min(offset + columns)];
             let _ = write!(stdout, "\x1b[2m{:08x}  \x1b[0m", offset);
 
             for (i, byte) in row.iter().enumerate() {
@@ -284,8 +286,8 @@ pub fn cat_hex(data: &[u8]) {
 
             let remaining = columns - row.len();
             if remaining > 0 {
-                for i in 0..remaining {
-                    if row.len() + i == 8 { let _ = write!(stdout, " "); }
+                if row.len() < 8 { let _ = write!(stdout, " "); }
+                for _ in 0..remaining {
                     let _ = write!(stdout, "   ");
                 }
             }
@@ -301,44 +303,27 @@ pub fn cat_hex(data: &[u8]) {
             let _ = writeln!(stdout, "\x1b[2m|\x1b[0m");
         }
 
-        // Footer line
-        let end_offset = end.min(data.len());
+        let end_offset = end_line * columns;
         let _ = writeln!(stdout, "\x1b[2m{:08x}\x1b[0m", end_offset);
 
-        // Page indicator + prompt
         if total_pages > 1 {
-            let _ = write!(
-                stdout,
-                "\x1b[2m-- Page {}/{} -- q:quit n:next p:prev  \x1b[0m",
-                current_page + 1,
-                total_pages
+            let action = pager::page_footer(
+                &mut stdout, current_page, total_pages,
+                start_line * columns, end_line * columns, data.len(),
             );
-            let _ = stdout.flush();
-
-            // Read single keypress
-            let mut buf = [0u8; 1];
-            // Set terminal to raw mode
-            let _ = std::process::Command::new("sh")
-                .args(["-c", "stty raw -echo < /dev/tty 2>/dev/null"])
-                .status();
-            let _ = io::stdin().read_exact(&mut buf);
-            let _ = std::process::Command::new("sh")
-                .args(["-c", "stty sane < /dev/tty 2>/dev/null"])
-                .status();
-
-            match buf[0] {
-                b'q' | 0x03 | 0x1b => break, // q / Ctrl-C / Escape
-                b'n' | b' ' => {
+            match action {
+                pager::PageAction::Quit => break,
+                pager::PageAction::Next => {
                     if current_page + 1 < total_pages {
                         current_page += 1;
                     }
                 }
-                b'p' | b'b' => {
+                pager::PageAction::Prev => {
                     if current_page > 0 {
                         current_page -= 1;
                     }
                 }
-                _ => {}
+                pager::PageAction::None => {}
             }
         } else {
             break;
