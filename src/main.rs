@@ -212,24 +212,25 @@ fn check_binary_repeat(path: &str) -> bool {
         .unwrap_or(0);
 
     // Read previous state
-    let (prev_path, prev_time, count) = fs::read_to_string(&state_file)
-        .ok()
-        .and_then(|s| {
+    let (prev_path, prev_time, count) = match fs::read_to_string(&state_file) {
+        Ok(s) => {
             let parts: Vec<&str> = s.split('\n').collect();
             if parts.len() >= 3 {
                 let p = parts[0].to_string();
                 let t = parts[1].parse::<u64>().unwrap_or(0);
                 let c = parts[2].parse::<u32>().unwrap_or(0);
-                Some((p, t, c))
+                (p, t, c)
             } else {
-                None
+                (String::new(), 0, 0)
             }
-        })
-        .unwrap_or_default();
+        }
+        Err(_) => (String::new(), 0, 0),
+    };
 
     // Reset if more than 2 seconds apart (not consecutive)
     let same_path = prev_path == path;
-    let close_enough = now.saturating_sub(prev_time) <= 2;
+    let elapsed = now.saturating_sub(prev_time);
+    let close_enough = elapsed <= 2;
 
     let (new_count, trigger) = if same_path && close_enough {
         let c = count + 1;
@@ -237,6 +238,9 @@ fn check_binary_repeat(path: &str) -> bool {
     } else {
         (0, false)
     };
+
+    // Debug: eprintln!("dbg: same={same_path} elapsed={elapsed}s count_in={count} new_count={new_count} trigger={trigger}");
+
 
     // Write new state
     let content = format!("{path}\n{now}\n{new_count}\n");
