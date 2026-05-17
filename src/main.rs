@@ -1,6 +1,7 @@
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use flate2::read::GzDecoder;
@@ -8,6 +9,8 @@ use flate2::read::GzDecoder;
 mod cat_markdown;
 mod cat_docx;
 mod cat_image;
+
+const STATE_DIR: &str = "/tmp/ccat-state";
 
 /// ccat - An enhanced cat tool with automatic file type detection
 #[derive(Parser)]
@@ -197,6 +200,143 @@ fn is_binary(data: &[u8]) -> bool {
     sample_len > 0 && nul_count > sample_len / 100
 }
 
+/// Returns true if this is the 3rd consecutive call on the same binary path.
+fn check_binary_repeat(path: &str) -> bool {
+    let dir = Path::new(STATE_DIR);
+    let _ = fs::create_dir_all(dir);
+    let state_file = dir.join("bin");
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // Read previous state
+    let (prev_path, prev_time, count) = fs::read_to_string(&state_file)
+        .ok()
+        .and_then(|s| {
+            let parts: Vec<&str> = s.split('\n').collect();
+            if parts.len() >= 3 {
+                let p = parts[0].to_string();
+                let t = parts[1].parse::<u64>().unwrap_or(0);
+                let c = parts[2].parse::<u32>().unwrap_or(0);
+                Some((p, t, c))
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    // Reset if more than 2 seconds apart (not consecutive)
+    let same_path = prev_path == path;
+    let close_enough = now.saturating_sub(prev_time) <= 2;
+
+    let (new_count, trigger) = if same_path && close_enough {
+        let c = count + 1;
+        (c, c >= 2)
+    } else {
+        (0, false)
+    };
+
+    // Write new state
+    let content = format!("{path}\n{now}\n{new_count}\n");
+    let _ = fs::write(&state_file, content);
+
+    trigger
+}
+
+fn cat_hex(data: &[u8]) {
+    let mut stdout = io::stdout();
+    let columns = 16;
+    let lines = data.len().div_ceil(columns);
+    let page_size = 24; // lines per page
+    let total_pages = lines.div_ceil(page_size);
+    let mut current_page: usize = 0;
+
+    loop {
+        let start = current_page * page_size * columns;
+        let end = ((current_page + 1) * page_size * columns).min(data.len());
+        let chunk = &data[start..end];
+
+        for (row_idx, row) in chunk.chunks(columns).enumerate() {
+            let offset = start + row_idx * columns;
+            let _ = write!(stdout, "\x1b[2m{:08x}  \x1b[0m", offset);
+
+            for (i, byte) in row.iter().enumerate() {
+                if i == 8 { let _ = write!(stdout, " "); }
+                if *byte == 0 {
+                    let _ = write!(stdout, "\x1b[2m{:02x}\x1b[0m ", byte);
+                } else if byte.is_ascii_graphic() || byte.is_ascii_whitespace() {
+                    let _ = write!(stdout, "\x1b[33m{:02x}\x1b[0m ", byte);
+                } else {
+                    let _ = write!(stdout, "{:02x} ", byte);
+                }
+            }
+
+            let remaining = columns - row.len();
+            if remaining > 0 {
+                for i in 0..remaining {
+                    if row.len() + i == 8 { let _ = write!(stdout, " "); }
+                    let _ = write!(stdout, "   ");
+                }
+            }
+
+            let _ = write!(stdout, " \x1b[2m|\x1b[0m");
+            for &byte in row {
+                if byte.is_ascii_graphic() || byte == b' ' {
+                    let _ = write!(stdout, "{}", byte as char);
+                } else {
+                    let _ = write!(stdout, "\x1b[2m.\x1b[0m");
+                }
+            }
+            let _ = writeln!(stdout, "\x1b[2m|\x1b[0m");
+        }
+
+        // Footer line
+        let end_offset = end.min(data.len());
+        let _ = writeln!(stdout, "\x1b[2m{:08x}\x1b[0m", end_offset);
+
+        // Page indicator + prompt
+        if total_pages > 1 {
+            let _ = write!(
+                stdout,
+                "\x1b[2m-- Page {}/{} -- q:quit n:next p:prev  \x1b[0m",
+                current_page + 1,
+                total_pages
+            );
+            let _ = stdout.flush();
+
+            // Read single keypress
+            let mut buf = [0u8; 1];
+            // Set terminal to raw mode
+            let _ = std::process::Command::new("sh")
+                .args(["-c", "stty raw -echo < /dev/tty 2>/dev/null"])
+                .status();
+            let _ = io::stdin().read_exact(&mut buf);
+            let _ = std::process::Command::new("sh")
+                .args(["-c", "stty sane < /dev/tty 2>/dev/null"])
+                .status();
+
+            match buf[0] {
+                b'q' | 0x03 | 0x1b => break, // q / Ctrl-C / Escape
+                b'n' | b' ' => {
+                    if current_page + 1 < total_pages {
+                        current_page += 1;
+                    }
+                }
+                b'p' | b'b' => {
+                    if current_page > 0 {
+                        current_page -= 1;
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            break;
+        }
+    }
+}
+
 fn cat_plain(data: &[u8]) {
     let s = String::from_utf8_lossy(data);
     print!("{s}");
@@ -284,11 +424,19 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool) 
         FileKind::Gzip => cat_gz(&data),
         FileKind::Image => cat_image::cat_image(&data),
         FileKind::PlainText => {
-            // Check if it's actually binary
             if is_binary(&data) {
                 if !show_type {
-                    let desc = describe_kind(&data, path_obj);
-                    eprintln!("ccat: {path}: {desc} (use -B for raw output)");
+                    let canonical = path_obj.canonicalize().ok()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.to_string());
+
+                    if check_binary_repeat(&canonical) {
+                        eprintln!("ccat: {path}: binary (hex dump):");
+                        cat_hex(&data);
+                    } else {
+                        let desc = describe_kind(&data, path_obj);
+                        eprintln!("ccat: {path}: {desc} (repeat to hex dump)");
+                    }
                 }
             } else {
                 cat_plain(&data);
