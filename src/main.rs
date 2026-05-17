@@ -14,6 +14,9 @@ mod cat_diff;
 mod cat_pdf;
 mod cat_archive;
 mod cat_media;
+mod cat_json;
+mod cat_yaml;
+mod cat_log;
 mod pager;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
@@ -67,6 +70,9 @@ enum FileKind {
     Pdf,
     Archive,
     Media,
+    Json,
+    Yaml,
+    Log,
     PlainText,
 }
 
@@ -109,6 +115,9 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
             "mp3" | "flac" | "ogg" | "wav" | "aac" | "m4a" | "mp4" | "mkv" | "webm" | "opus" => {
                 return FileKind::Media;
             }
+            "json" => return FileKind::Json,
+            "yaml" | "yml" => return FileKind::Yaml,
+            "log" => return FileKind::Log,
             _ => {}
         }
     }
@@ -116,6 +125,42 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
     // Check if it looks like markdown
     if looks_like_markdown(data) {
         return FileKind::Markdown;
+    }
+
+    // Detect JSON by looking at first non-whitespace char
+    let first_nonws = data.iter().find(|&&b| b != b' ' && b != b'\t' && b != b'\n' && b != b'\r');
+    if first_nonws == Some(&b'{') || first_nonws == Some(&b'[') {
+        // Verify it parses
+        let s = String::from_utf8_lossy(data);
+        if serde_json::from_str::<serde_json::Value>(&s).is_ok() {
+            return FileKind::Json;
+        }
+    }
+
+    // Detect YAML: starts with key: value, or ---
+    if let Some(&b) = first_nonws {
+        if b == b'-' && data.len() > 3 && data[..3].as_ref() == b"---" {
+            return FileKind::Yaml;
+        }
+        if data.iter().take(5).any(|&b| b == b':') {
+            let s = String::from_utf8_lossy(data);
+            let lines: Vec<&str> = s.lines().take(10).collect();
+            if lines.iter().any(|l| l.trim().starts_with(|c: char| c.is_ascii_alphabetic()) && l.contains(':')) {
+                return FileKind::Yaml;
+            }
+        }
+    }
+
+    // Detect log files: contains timestamps or log levels
+    if first_nonws.map_or(false, |&b| b.is_ascii_alphanumeric()) {
+        let sample = String::from_utf8_lossy(data);
+        let lower = sample.to_lowercase();
+        let log_keywords = ["error", "warn", "info", "debug", "trace", "fatal", "panic"];
+        let has_level = log_keywords.iter().any(|k| lower.contains(k));
+        let has_timestamp = sample.contains(|c: char| c.is_ascii_digit()) && (sample.contains('-') || sample.contains(':'));
+        if has_level || has_timestamp {
+            return FileKind::Log;
+        }
     }
 
     FileKind::PlainText
@@ -220,9 +265,11 @@ fn readable_file_kind(mime: &str, path: &Path) -> String {
             }
         }
         "application/pdf" => "PDF document".into(),
+        "application/json" => "JSON data".into(),
+        "text/yaml" | "text/x-yaml" => "YAML document".into(),
+        "text/x-log" => "log file".into(),
         "inode/directory" => "directory".into(),
         "text/plain" => "ASCII text".into(),
-        "application/json" => "JSON data".into(),
         "text/html" => "HTML document".into(),
         "application/xml" | "text/xml" => "XML document".into(),
         "application/x-elf" => "ELF executable".into(),
@@ -526,6 +573,9 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, 
         FileKind::Pdf => cat_pdf::cat_pdf(&data),
         FileKind::Archive => cat_archive::cat_archive(&data, path),
         FileKind::Media => cat_media::cat_media(&data),
+        FileKind::Json => cat_json::cat_json(&data),
+        FileKind::Yaml => cat_yaml::cat_yaml(&data),
+        FileKind::Log => cat_log::cat_log(&data),
         FileKind::PlainText => {
             if is_binary(&data) {
                 if !show_type {
@@ -626,6 +676,9 @@ fn main() {
                 FileKind::Pdf => cat_pdf::cat_pdf(&buf),
                 FileKind::Archive => cat_archive::cat_archive(&buf, "stdin"),
                 FileKind::Media => cat_media::cat_media(&buf),
+                FileKind::Json => cat_json::cat_json(&buf),
+                FileKind::Yaml => cat_yaml::cat_yaml(&buf),
+                FileKind::Log => cat_log::cat_log(&buf),
                 FileKind::PlainText => {
                     if is_binary(&buf) {
                         if !show_type {
