@@ -69,6 +69,17 @@ fn disasm_x86(file: object::File<'_>, _data: &[u8]) {
     let mut stdout = std::io::stdout();
     let mut total: Vec<String> = Vec::new();
     let mut pos: usize = 0;
+    let total_size = text_data.len();
+
+    // Estimate total instructions for progress (rough: avg 4 bytes per instr)
+    let estimated = (total_size / 4).max(1);
+    let progress_interval = (estimated / 100).max(1);
+    let mut next_progress = progress_interval;
+
+    // Show initial progress
+    let mut stdout_progress = std::io::stdout();
+    let _ = write!(&mut stdout_progress, "\x1b[2mDecoding (0/{total_size} bytes)...\x1b[0m");
+    let _ = stdout_progress.flush();
 
     while decoder.can_decode() {
         decoder.decode_out(&mut instruction);
@@ -86,12 +97,27 @@ fn disasm_x86(file: object::File<'_>, _data: &[u8]) {
             .join(" ");
         pos += instr_len;
 
+        // Progress indicator
+        if pos >= next_progress || !decoder.can_decode() {
+            let pct = (pos as f64 / total_size as f64 * 100.0).min(100.0) as u32;
+            let _ = write!(
+                &mut stdout_progress,
+                "\r\x1b[2mDecoding ({pos}/{total_size} bytes, {pct}%)...\x1b[0m"
+            );
+            let _ = stdout_progress.flush();
+            next_progress = pos.saturating_add(progress_interval * (pos / progress_interval + 1).max(1) * 4);
+        }
+
         let line = format!(
             "\x1b[2m{:08x}\x1b[0m  \x1b[33m{:<20}\x1b[0m {}",
             ip, bytes_str, buf
         );
         total.push(line);
     }
+
+    // Clear progress line
+    let _ = write!(&mut stdout_progress, "\r\x1b[K");
+    let _ = stdout_progress.flush();
 
     if total.is_empty() {
         writeln!(&mut stdout, "ccat: no instructions found in .text").ok();
