@@ -294,11 +294,12 @@ fn is_elf(data: &[u8]) -> bool {
 }
 
 fn is_binary(data: &[u8]) -> bool {
-    let sample = data.iter().take(8192);
-    let nul_count = sample.filter(|&&b| b == 0).count();
-    // If more than 1% null bytes in first 8KB, it's binary
     let sample_len = data.len().min(8192);
-    sample_len > 0 && nul_count > sample_len / 100
+    if sample_len == 0 { return false; }
+    let nul_count = data.iter().take(8192).filter(|&&b| b == 0).count();
+    let non_printable = data.iter().take(8192).filter(|&&b| b != 0 && !b.is_ascii_graphic() && !b.is_ascii_whitespace()).count();
+    // If more than 1% null bytes OR more than 30% non-printable non-null bytes
+    nul_count > sample_len / 100 || non_printable > sample_len * 3 / 10
 }
 
 /// Returns true if this is the 3rd consecutive call on the same binary path.
@@ -612,6 +613,12 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, 
 
 fn main() {
     let cli = Cli::parse();
+
+    // Respect NO_COLOR
+    if std::env::var("NO_COLOR").is_ok() && !std::env::var("NO_COLOR").unwrap_or_default().is_empty() {
+        // SAFETY: Setting TERM before any color output is safe
+        unsafe { std::env::set_var("TERM", "dumb"); }
+    }
 
     let _force_ascii = cli.ascii;
     let _force_binary = cli.binary;
