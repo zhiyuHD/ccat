@@ -56,3 +56,6 @@ lofty = "0.24"
 
 # Lightweight regex for sed substitution
 regex-lite = "0.1"
+
+# Shell completion generation
+clap_complete = "4"

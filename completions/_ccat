@@ -1,0 +1,53 @@
+#compdef ccat
+
+autoload -U is-at-least
+
+_ccat() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'--completions=[Generate shell completions]:SHELL:(bash elvish fish powershell zsh)' \
+'*-D+[Diff mode\: compare two files (like \`diff\`)]:file1:_default:file1:_default' \
+'*--diff=[Diff mode\: compare two files (like \`diff\`)]:file1:_default:file1:_default' \
+'-e+[Apply sed-like substitution (e.g. s/foo/bar/)]:expression:_default' \
+'--edit=[Apply sed-like substitution (e.g. s/foo/bar/)]:expression:_default' \
+'-A[Force plain text output]' \
+'--ascii[Force plain text output]' \
+'-B[Display raw bytes (no processing)]' \
+'--binary[Display raw bytes (no processing)]' \
+'-T[Show detected file type (like \`file\` command)]' \
+'--type[Show detected file type (like \`file\` command)]' \
+'(-b --number-nonblank)-n[Number lines (-n\: all, -b\: non-blank)]' \
+'(-b --number-nonblank)--number[Number lines (-n\: all, -b\: non-blank)]' \
+'(-n --number)-b[Number non-blank lines]' \
+'(-n --number)--number-nonblank[Number non-blank lines]' \
+'-s[Squeeze consecutive blank lines into one]' \
+'--squeeze-blank[Squeeze consecutive blank lines into one]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+'*::files -- File(s) to display (or use - to read stdin). When a directory is given, shows a summary similar to `file`:_default' \
+&& ret=0
+}
+
+(( $+functions[_ccat_commands] )) ||
+_ccat_commands() {
+    local commands; commands=()
+    _describe -t commands 'ccat commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_ccat" ]; then
+    _ccat "$@"
+else
+    compdef _ccat ccat
+fi

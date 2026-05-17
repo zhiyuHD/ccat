@@ -4,6 +4,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
+use clap::CommandFactory;
+use clap_complete::{Generator, Shell};
 use flate2::read::GzDecoder;
 
 mod cat_markdown;
@@ -28,6 +30,10 @@ struct Cli {
     /// File(s) to display (or use - to read stdin). When a directory is given,
     /// shows a summary similar to `file`.
     files: Vec<String>,
+
+    /// Generate shell completions
+    #[arg(long = "completions", value_name = "SHELL", value_parser = clap::value_parser!(Shell), hide = true)]
+    completions: Option<Shell>,
 
     /// Diff mode: compare two files (like `diff`)
     #[arg(short = 'D', long = "diff", num_args = 2, value_names = ["file1", "file2"])]
@@ -612,7 +618,15 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, 
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+
+    // Generate shell completions
+    if let Some(shell) = cli.completions.take() {
+        let mut cmd = Cli::command();
+        let name = cmd.get_name().to_string();
+        clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
+        return;
+    }
 
     // Respect NO_COLOR
     if std::env::var("NO_COLOR").is_ok() && !std::env::var("NO_COLOR").unwrap_or_default().is_empty() {

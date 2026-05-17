@@ -1,0 +1,101 @@
+.\" Man page for ccat-rs
+.TH CCAT 1 "2026-05-17" "0.1.0" "User Commands"
+.SH NAME
+ccat \- Enhanced cat: auto-detect and display markdown, docx, images, gz, diff, and disassemble ELF
+.SH SYNOPSIS
+.B ccat
+[\fI\,OPTIONS\/\fR] [\fI\,FILES\/\fR]...
+.SH DESCRIPTION
+ccat is an enhanced cat tool that automatically detects file types and renders them appropriately in the terminal. It supports Markdown rendering, Word document text extraction, image display (Kitty/Sixel/half-block), gzip transparent decompression, PDF text extraction, archive listing, audio/video metadata, JSON/YAML formatting, log highlighting, ELF binary disassembly, and diff viewing.
+.SH OPTIONS
+.TP
+\fB\-D\fR, \fB\-\-diff\fR \fI<file1>\fR \fI<file2>\fR
+Diff mode: compare two files.
+.TP
+\fB\-A\fR, \fB\-\-ascii\fR
+Force plain text output (skip markdown/docx/image processing).
+.TP
+\fB\-B\fR, \fB\-\-binary\fR
+Display raw bytes (no processing).
+.TP
+\fB\-T\fR, \fB\-\-type\fR
+Show detected file type (like the \fBfile\fR command).
+.TP
+\fB\-n\fR, \fB\-\-number\fR
+Number all output lines.
+.TP
+\fB\-b\fR, \fB\-\-number\-nonblank\fR
+Number non-blank output lines.
+.TP
+\fB\-s\fR, \fB\-\-squeeze\-blank\fR
+Squeeze consecutive blank lines into one.
+.TP
+\fB\-e\fR, \fB\-\-edit\fR \fI<expression>\fR
+Apply sed\-like substitution (e.g. s/foo/bar/).
+.TP
+\fB\-\-completions\fR \fI<SHELL>\fR
+Generate shell completions (bash, zsh, fish, etc.).
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help.
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version.
+.SH DETECTED FILE TYPES
+ccat detects the following file types automatically:
+.IP \[bu] 2
+Markdown (.md, .markdown) \- rendered with syntax highlighting
+.IP \[bu] 2
+Word documents (.docx) \- text extraction with formatting
+.IP \[bu] 2
+Images (.png, .jpg, .gif, .webp, .bmp, .tiff) \- terminal display
+.IP \[bu] 2
+PDF (.pdf) \- text extraction
+.IP \[bu] 2
+Archives (.zip, .tar, .tgz, .bz2) \- file listing
+.IP \[bu] 2
+Audio/Video (.mp3, .flac, .ogg, .mp4, etc.) \- metadata display
+.IP \[bu] 2
+JSON (.json) \- formatted with syntax highlighting
+.IP \[bu] 2
+YAML (.yaml, .yml) \- syntax highlighting
+.IP \[bu] 2
+Log files (.log) \- level/timestamp highlighting
+.IP \[bu] 2
+Gzip (.gz) \- transparent decompression
+.IP \[bu] 2
+ELF binaries \- disassembly (x86/x86_64, three consecutive calls)
+.SH BINARY VIEWER
+When a binary file is detected, ccat displays its type and waits for a third consecutive invocation on the same file within 2 seconds to enter interactive hex dump or disassembly mode.
+.SH ENVIRONMENT
+.TP
+\fBNO_COLOR\fR
+Set to any non-empty value to disable colored output.
+.SH EXAMPLES
+.TP
+Display a Markdown file with syntax highlighting:
+ccat README.md
+.TP
+Show file types in a directory:
+ccat -T src/
+.TP
+Compare two files:
+ccat -D file1.txt file2.txt
+.TP
+Display line numbers:
+ccat -n file.txt
+.TP
+Disassemble a binary (run three times):
+ccat /bin/ls
+.TP
+View audio metadata:
+ccat song.mp3
+.TP
+Extract PDF text:
+ccat document.pdf
+.SH AUTHORS
+Zhiyu Huang <zhiyuh@ccat.dev>
+.SH REPORTING BUGS
+https://github.com/zhiyuHD/ccat/issues
+.SH LICENSE
+MIT
