@@ -9,6 +9,7 @@ use flate2::read::GzDecoder;
 mod cat_markdown;
 mod cat_docx;
 mod cat_image;
+mod cat_disasm;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
 
@@ -192,6 +193,10 @@ fn readable_file_kind(mime: &str, path: &Path) -> String {
     }
 }
 
+fn is_elf(data: &[u8]) -> bool {
+    data.len() > 4 && data[0] == 0x7f && data[1] == b'E' && data[2] == b'L' && data[3] == b'F'
+}
+
 fn is_binary(data: &[u8]) -> bool {
     let sample = data.iter().take(8192);
     let nul_count = sample.filter(|&&b| b == 0).count();
@@ -249,7 +254,7 @@ fn check_binary_repeat(path: &str) -> bool {
     trigger
 }
 
-fn cat_hex(data: &[u8]) {
+pub fn cat_hex(data: &[u8]) {
     let mut stdout = io::stdout();
     let columns = 16;
     let lines = data.len().div_ceil(columns);
@@ -435,8 +440,14 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool) 
                         .unwrap_or_else(|| path.to_string());
 
                     if check_binary_repeat(&canonical) {
-                        eprintln!("ccat: {path}: binary (hex dump):");
-                        cat_hex(&data);
+                        // Check if it's an ELF binary -> disassemble
+                        if is_elf(&data) {
+                            eprintln!("ccat: {path}: ELF binary (disassembly):");
+                            cat_disasm::disassemble_elf(&data);
+                        } else {
+                            eprintln!("ccat: {path}: binary (hex dump):");
+                            cat_hex(&data);
+                        }
                     } else {
                         let desc = describe_kind(&data, path_obj);
                         eprintln!("ccat: {path}: {desc} (repeat to hex dump)");

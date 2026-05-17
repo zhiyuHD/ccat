@@ -33,3 +33,9 @@ flate2 = "1"
 
 # For docx Color value extraction
 serde_json = "1"
+
+# ELF parsing + architecture detection
+object = "0.39"
+
+# x86/x86_64 disassembly
+iced-x86 = "1.21"
