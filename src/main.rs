@@ -19,6 +19,8 @@ mod cat_media;
 mod cat_json;
 mod cat_yaml;
 mod cat_log;
+mod cat_csv;
+mod cat_toml;
 mod pager;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
@@ -78,6 +80,8 @@ enum FileKind {
     Media,
     Json,
     Yaml,
+    Toml,
+    Csv,
     Log,
     PlainText,
 }
@@ -123,6 +127,8 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
             }
             "json" => return FileKind::Json,
             "yaml" | "yml" => return FileKind::Yaml,
+            "toml" => return FileKind::Toml,
+            "csv" | "tsv" => return FileKind::Csv,
             "log" => return FileKind::Log,
             _ => {}
         }
@@ -152,10 +158,42 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
             let s = String::from_utf8_lossy(data);
             let lines: Vec<&str> = s.lines().take(10).collect();
             if lines.iter().any(|l| l.trim().starts_with(|c: char| c.is_ascii_alphabetic()) && l.contains(':')) {
+                // Could be YAML or TOML — check for = instead of :
+                if lines.iter().any(|l| l.trim().contains('=') && !l.trim().starts_with('#')) {
+                    return FileKind::Toml;
+                }
                 return FileKind::Yaml;
             }
         }
     }
+
+    // Detect CSV: contains comma-separated values
+    if first_nonws.map_or(false, |&b| b.is_ascii_alphanumeric()) {
+        let s = String::from_utf8_lossy(data);
+        let lines: Vec<&str> = s.lines().take(10).collect();
+        if lines.len() >= 2 {
+            let comma_count = lines[0].matches(',').count();
+            if comma_count >= 1 {
+                let consistent = lines.iter().skip(1)
+                    .filter(|l| !l.trim().is_empty())
+                    .all(|l| l.matches(',').count() == comma_count || l.matches(',').count() == 0);
+                if consistent {
+                    return FileKind::Csv;
+                }
+            }
+            let tab_count = lines[0].matches('\t').count();
+            if tab_count >= 1 {
+                let consistent = lines.iter().skip(1)
+                    .filter(|l| !l.trim().is_empty())
+                    .all(|l| l.matches('\t').count() == tab_count || l.matches('\t').count() == 0);
+                if consistent {
+                    return FileKind::Csv;
+                }
+            }
+        }
+    }
+
+    // Detect TOML: contains [section] or key = value patterns
 
     // Detect log files: contains timestamps or log levels
     if first_nonws.map_or(false, |&b| b.is_ascii_alphanumeric()) {
@@ -415,17 +453,17 @@ pub fn cat_hex(data: &[u8]) {
             );
             match action {
                 pager::PageAction::Quit => break,
-                pager::PageAction::Next => {
+                pager::PageAction::Next(_) => {
                     if current_page + 1 < total_pages {
                         current_page += 1;
                     }
                 }
-                pager::PageAction::Prev => {
+                pager::PageAction::Prev(_) => {
                     if current_page > 0 {
                         current_page -= 1;
                     }
                 }
-                pager::PageAction::None => {}
+                pager::PageAction::None | pager::PageAction::Search(_) | pager::PageAction::Goto(_) => {}
             }
         } else {
             break;
@@ -582,6 +620,8 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, 
         FileKind::Media => cat_media::cat_media(&data),
         FileKind::Json => cat_json::cat_json(&data),
         FileKind::Yaml => cat_yaml::cat_yaml(&data),
+        FileKind::Toml => cat_toml::cat_toml(&data),
+        FileKind::Csv => cat_csv::cat_csv(&data),
         FileKind::Log => cat_log::cat_log(&data),
         FileKind::PlainText => {
             if is_binary(&data) {
@@ -699,6 +739,8 @@ fn main() {
                 FileKind::Media => cat_media::cat_media(&buf),
                 FileKind::Json => cat_json::cat_json(&buf),
                 FileKind::Yaml => cat_yaml::cat_yaml(&buf),
+                FileKind::Toml => cat_toml::cat_toml(&buf),
+                FileKind::Csv => cat_csv::cat_csv(&buf),
                 FileKind::Log => cat_log::cat_log(&buf),
                 FileKind::PlainText => {
                     if is_binary(&buf) {

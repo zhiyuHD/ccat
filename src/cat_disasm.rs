@@ -155,17 +155,13 @@ fn disasm_x86(file: object::File<'_>, _data: &[u8]) {
             );
             match action {
                 pager::PageAction::Quit => break,
-                pager::PageAction::Next => {
-                    if current_page + 1 < total_pages {
-                        current_page += 1;
-                    }
+                pager::PageAction::Next(_) => {
+                    if current_page + 1 < total_pages { current_page += 1; }
                 }
-                pager::PageAction::Prev => {
-                    if current_page > 0 {
-                        current_page -= 1;
-                    }
+                pager::PageAction::Prev(_) => {
+                    if current_page > 0 { current_page -= 1; }
                 }
-                pager::PageAction::None => {}
+                _ => {}
             }
         } else {
             break;

@@ -66,40 +66,11 @@ pub fn cat_diff(data: &[u8], path_a: &str, path_b: &str) {
     }
 
     // Paged output
-    let (term_height, _) = pager::terminal_size();
-    let page_size = term_height.saturating_sub(2).max(5);
-    let total_pages = lines.len().div_ceil(page_size);
-    let mut current_page: usize = 0;
-
-    loop {
-        let start = current_page * page_size;
-        let end = (start + page_size).min(lines.len());
-
-        for line in &lines[start..end] {
+    if lines.len() > 20 {
+        pager::run_pager(&lines);
+    } else {
+        for line in &lines {
             let _ = writeln!(stdout, "{}", line);
-        }
-
-        if total_pages > 1 {
-            let action = pager::page_footer(
-                &mut stdout, current_page, total_pages,
-                start, end, lines.len(),
-            );
-            match action {
-                pager::PageAction::Quit => break,
-                pager::PageAction::Next => {
-                    if current_page + 1 < total_pages {
-                        current_page += 1;
-                    }
-                }
-                pager::PageAction::Prev => {
-                    if current_page > 0 {
-                        current_page -= 1;
-                    }
-                }
-                pager::PageAction::None => {}
-            }
-        } else {
-            break;
         }
     }
 }
