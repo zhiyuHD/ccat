@@ -36,6 +36,14 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Build source tarball (Linux only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          pkgname=ccat-rs
+          version=${{ github.event.release.tag_name }}
+          version=${version#v}
+          git archive --format=tar.gz --prefix=$pkgname-$version/ -o $pkgname-$version.tar.gz HEAD
+
       - name: Package Linux binary
         if: matrix.archive == 'tar.gz'
         run: |
@@ -55,8 +63,13 @@ jobs:
           7z a ../ccat-${{ matrix.target }}.zip *
           cd ..
 
-      - name: Upload release asset
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} ccat-${{ matrix.target }}.${{ matrix.archive }} --clobber
+          tag=${{ github.event.release.tag_name }}
+          gh release upload "$tag" ccat-${{ matrix.target }}.${{ matrix.archive }} --clobber
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            version=${tag#v}
+            gh release upload "$tag" "ccat-rs-$version.tar.gz" --clobber
+          fi
