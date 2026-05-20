@@ -99,13 +99,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: zhiyuHD/ccat
+          path: repo
+
+      - name: Checkout AUR package source
+        uses: actions/checkout@v4
+        with:
+          repository: zhiyuHD/ccat-aur
+          path: aur
 
       - name: Compute SHA256 of source tarball
         id: sha
         run: |
           version="${{ github.event.release.tag_name }}"
           version="${version#v}"
-          tarball="ccat-rs-$version.tar.gz"
+          tarball="repo/ccat-rs-$version.tar.gz"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$tarball" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
@@ -113,7 +122,7 @@ jobs:
         run: |
           ver=${{ steps.sha.outputs.version }}
           sha=${{ steps.sha.outputs.sha256 }}
-          cp ccat-aur/PKGBUILD PKGBUILD
+          cp aur/PKGBUILD PKGBUILD
           sed -i "s/^pkgver=.*/pkgver=$ver/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
           sed -i "s/^sha256sums=('[^']*')/sha256sums=('$sha')/" PKGBUILD
