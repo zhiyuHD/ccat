@@ -99,34 +99,59 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          repository: zhiyuHD/ccat
-          path: repo
 
-      - name: Checkout AUR package source
-        uses: actions/checkout@v4
-        with:
-          repository: zhiyuHD/ccat-aur
-          path: aur
-
-      - name: Compute SHA256 of source tarball
+      - name: Download source tarball and compute SHA256
         id: sha
         run: |
           version="${{ github.event.release.tag_name }}"
           version="${version#v}"
-          tarball="repo/ccat-rs-$version.tar.gz"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "sha256=$(sha256sum "$tarball" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          curl -sL "https://github.com/zhiyuHD/ccat/archive/refs/tags/v$version.tar.gz" -o source.tar.gz
+          echo "sha256=$(sha256sum source.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare PKGBUILD with updated version
+      - name: Generate PKGBUILD
         run: |
           ver=${{ steps.sha.outputs.version }}
           sha=${{ steps.sha.outputs.sha256 }}
-          cp aur/PKGBUILD PKGBUILD
-          sed -i "s/^pkgver=.*/pkgver=$ver/" PKGBUILD
-          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          sed -i "s/^sha256sums=('[^']*')/sha256sums=('$sha')/" PKGBUILD
-          sed -i "s|/download/v[^/]*/|/download/v$ver/|" PKGBUILD
+          cat > PKGBUILD << EOF
+# Maintainer: Zhiyu Wang <zhiyuxl@outlook.com>
+# Maintainer: LuoTianyi_arm64 <2153585992@qq.com>
+# Contributor: Crush <crush@ccat.dev>
+
+pkgname=ccat-rs
+pkgver=$ver
+pkgrel=1
+pkgdesc="Universal file viewer — markdown, docx, images, PDF, audio, video, JSON, YAML, logs, ELF disasm, diff, gz, archives"
+arch=('x86_64' 'aarch64')
+url="https://github.com/zhiyuHD/ccat"
+license=('MIT')
+depends=('gcc-libs' 'oniguruma')
+makedepends=('cargo' 'pkg-config')
+source=("ccat-rs-\$pkgver.tar.gz::https://github.com/zhiyuHD/ccat/releases/download/v\$pkgver/ccat-rs-\$pkgver.tar.gz")
+sha256sums=('$sha')
+
+build() {
+  cd "\$srcdir/ccat-rs-\$pkgver"
+  export CARGO_BUILD_JOBS=\$(nproc)
+  export RUSTONIG_SYSTEM_LIBONIG=1
+  cargo build --release
+}
+
+check() {
+  cd "\$srcdir/ccat-rs-\$pkgver"
+  export RUSTONIG_SYSTEM_LIBONIG=1
+  cargo test --release --frozen
+}
+
+package() {
+  cd "\$srcdir/ccat-rs-\$pkgver"
+  install -Dm755 target/release/ccat "\$pkgdir/usr/bin/ccat"
+  install -Dm644 completions/ccat.bash "\$pkgdir/usr/share/bash-completion/completions/ccat"
+  install -Dm644 completions/_ccat "\$pkgdir/usr/share/zsh/site-functions/_ccat"
+  install -Dm644 completions/ccat.fish "\$pkgdir/usr/share/fish/vendor_completions.d/ccat.fish"
+  install -Dm644 ccat.1 "\$pkgdir/usr/share/man/man1/ccat.1"
+}
+EOF
 
       - name: Publish AUR package
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
@@ -136,4 +161,3 @@ jobs:
           commit_username: github-actions
           commit_email: github-actions@github.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          updpkgsums: false
