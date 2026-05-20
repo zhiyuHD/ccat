@@ -113,45 +113,7 @@ jobs:
         run: |
           ver=${{ steps.sha.outputs.version }}
           sha=${{ steps.sha.outputs.sha256 }}
-          cat > PKGBUILD << EOF
-# Maintainer: Zhiyu Wang <zhiyuxl@outlook.com>
-# Maintainer: LuoTianyi_arm64 <2153585992@qq.com>
-# Contributor: Crush <crush@ccat.dev>
-
-pkgname=ccat-rs
-pkgver=$ver
-pkgrel=1
-pkgdesc="Universal file viewer — markdown, docx, images, PDF, audio, video, JSON, YAML, logs, ELF disasm, diff, gz, archives"
-arch=('x86_64' 'aarch64')
-url="https://github.com/zhiyuHD/ccat"
-license=('MIT')
-depends=('gcc-libs' 'oniguruma')
-makedepends=('cargo' 'pkg-config')
-source=("ccat-rs-\$pkgver.tar.gz::https://github.com/zhiyuHD/ccat/releases/download/v\$pkgver/ccat-rs-\$pkgver.tar.gz")
-sha256sums=('$sha')
-
-build() {
-  cd "\$srcdir/ccat-rs-\$pkgver"
-  export CARGO_BUILD_JOBS=\$(nproc)
-  export RUSTONIG_SYSTEM_LIBONIG=1
-  cargo build --release
-}
-
-check() {
-  cd "\$srcdir/ccat-rs-\$pkgver"
-  export RUSTONIG_SYSTEM_LIBONIG=1
-  cargo test --release --frozen
-}
-
-package() {
-  cd "\$srcdir/ccat-rs-\$pkgver"
-  install -Dm755 target/release/ccat "\$pkgdir/usr/bin/ccat"
-  install -Dm644 completions/ccat.bash "\$pkgdir/usr/share/bash-completion/completions/ccat"
-  install -Dm644 completions/_ccat "\$pkgdir/usr/share/zsh/site-functions/_ccat"
-  install -Dm644 completions/ccat.fish "\$pkgdir/usr/share/fish/vendor_completions.d/ccat.fish"
-  install -Dm644 ccat.1 "\$pkgdir/usr/share/man/man1/ccat.1"
-}
-EOF
+          sed "s/^pkgver=.*/pkgver=$ver/; s/^pkgrel=.*/pkgrel=1/; s/^sha256sums=('[^']*')/sha256sums=('$sha')/" .github/workflows/aur-pkgbuild.base > PKGBUILD
 
       - name: Publish AUR package
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
