@@ -133,12 +133,12 @@ jobs:
           # makepkg not available on runners, generate .SRCINFO manually from PKGBUILD
           source PKGBUILD
           cat > .SRCINFO <<SRCEOF
-          pkgbase = ${pkgname}
-          	pkgdesc = ${pkgdesc}
-          	pkgver = ${pkgver}
-          	pkgrel = ${pkgrel}
-          	url = ${url}
-          	install = ${install}
+          pkgbase = $pkgname
+          	pkgdesc = $pkgdesc
+          	pkgver = $pkgver
+          	pkgrel = $pkgrel
+          	url = $url
+          	install = $install
           	license = ${license[@]}
           	arch = ${arch[@]}
 SRCEOF
