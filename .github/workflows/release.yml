@@ -100,14 +100,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download source tarball and compute SHA256
+      - name: Download source tarball from release assets and compute SHA256
         id: sha
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ github.event.release.tag_name }}"
           version="${version#v}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          curl -sL "https://github.com/zhiyuHD/ccat/archive/refs/tags/v$version.tar.gz" -o source.tar.gz
-          echo "sha256=$(sha256sum source.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          gh release download "${{ github.event.release.tag_name }}" --pattern "ccat-rs-$version.tar.gz"
+          echo "sha256=$(sha256sum "ccat-rs-$version.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Generate PKGBUILD
         run: |
