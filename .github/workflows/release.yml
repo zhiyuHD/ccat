@@ -109,54 +109,22 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$tarball" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Clone AUR repository
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur_key
-          chmod 600 ~/.ssh/aur_key
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes"
-          git clone ssh://aur@aur.archlinux.org/ccat-rs.git aur
-
-      - name: Update PKGBUILD
-        working-directory: aur
-        env:
-          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes
+      - name: Prepare PKGBUILD with updated version
         run: |
           ver=${{ steps.sha.outputs.version }}
           sha=${{ steps.sha.outputs.sha256 }}
+          cp ccat-aur/PKGBUILD PKGBUILD
           sed -i "s/^pkgver=.*/pkgver=$ver/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
           sed -i "s/^sha256sums=('[^']*')/sha256sums=('$sha')/" PKGBUILD
           sed -i "s|/download/v[^/]*/|/download/v$ver/|" PKGBUILD
 
-      - name: Update .SRCINFO
-        working-directory: aur
-        env:
-          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes
-        run: |
-          source PKGBUILD
-          {
-            echo "pkgbase = $pkgname"
-            echo "	pkgdesc = $pkgdesc"
-            echo "	pkgver = $pkgver"
-            echo "	pkgrel = $pkgrel"
-            echo "	url = $url"
-            for lic in "${license[@]}"; do echo "	license = $lic"; done
-            for a in "${arch[@]}"; do echo "	arch = $a"; done
-            for dep in "${depends[@]}"; do echo "	depends = $dep"; done
-            for dep in "${makedepends[@]}"; do echo "	makedepends = $dep"; done
-            for src in "${source[@]}"; do echo "	source = $src"; done
-            for chk in "${sha256sums[@]}"; do echo "	sha256sums = $chk"; done
-          } > .SRCINFO
-
-      - name: Commit and push
-        working-directory: aur
-        env:
-          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add PKGBUILD .SRCINFO
-          git commit -m "Update to v${{ steps.sha.outputs.version }}"
-          git push
+      - name: Publish AUR package
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
+        with:
+          pkgname: ccat-rs
+          pkgbuild: PKGBUILD
+          commit_username: github-actions
+          commit_email: github-actions@github.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          updpkgsums: false
