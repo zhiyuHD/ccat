@@ -106,10 +106,10 @@ jobs:
       - name: Clone AUR repository
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
           eval "$(ssh-agent -s)"
           echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" | ssh-add -
-          git clone aur@aur.archlinux.org/ccat-rs.git aur
+          git clone ssh://aur@aur.archlinux.org/ccat-rs.git aur
 
       - name: Update PKGBUILD
         working-directory: aur
