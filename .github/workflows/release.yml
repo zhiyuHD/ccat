@@ -113,12 +113,15 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
-          eval "$(ssh-agent -s)"
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" | ssh-add -
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes"
           git clone ssh://aur@aur.archlinux.org/ccat-rs.git aur
 
       - name: Update PKGBUILD
         working-directory: aur
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes
         run: |
           ver=${{ steps.sha.outputs.version }}
           sha=${{ steps.sha.outputs.sha256 }}
@@ -129,8 +132,9 @@ jobs:
 
       - name: Update .SRCINFO
         working-directory: aur
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes
         run: |
-          # makepkg not available on runners, generate .SRCINFO manually from PKGBUILD
           source PKGBUILD
           {
             echo "pkgbase = $pkgname"
@@ -148,6 +152,8 @@ jobs:
 
       - name: Commit and push
         working-directory: aur
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
