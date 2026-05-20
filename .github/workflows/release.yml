@@ -66,13 +66,10 @@ jobs:
           targets: x86_64-pc-windows-gnu
 
       - name: Install cross-compilation dependencies (Windows)
+        timeout-minutes: 3
         run: |
-          # Use mingw from prebuilt Ubuntu package manager with retries
-          for i in 1 2 3; do
-            sudo apt-get update -qq && sudo apt-get install -y -qq mingw-w64 && break
-            sleep 5
-          done
-          which x86_64-w64-mingw32-gcc 2>/dev/null || echo "::warning::mingw not available after retries"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64
 
       - name: Build release
         if: always()
