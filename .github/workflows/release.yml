@@ -123,7 +123,31 @@ jobs:
 
       - name: Update .SRCINFO
         working-directory: aur
-        run: makepkg --printsrcinfo > .SRCINFO
+        run: |
+          # makepkg not available on runners, generate .SRCINFO manually from PKGBUILD
+          source PKGBUILD
+          cat > .SRCINFO <<SRCEOF
+          pkgbase = ${pkgname}
+          	pkgdesc = ${pkgdesc}
+          	pkgver = ${pkgver}
+          	pkgrel = ${pkgrel}
+          	url = ${url}
+          	install = ${install}
+          	license = ${license[@]}
+          	arch = ${arch[@]}
+SRCEOF
+          for dep in "${depends[@]}"; do
+            echo "	depends = $dep" >> .SRCINFO
+          done
+          for dep in "${makedepends[@]}"; do
+            echo "	makedepends = $dep" >> .SRCINFO
+          done
+          for src in "${source[@]}"; do
+            echo "	source = $src" >> .SRCINFO
+          done
+          for chk in "${sha256sums[@]}"; do
+            echo "	sha256sums = $chk" >> .SRCINFO
+          done
 
       - name: Commit and push
         working-directory: aur
