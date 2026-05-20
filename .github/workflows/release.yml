@@ -50,6 +50,7 @@ jobs:
   release-windows:
     name: Build Windows
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -59,12 +60,16 @@ jobs:
           targets: x86_64-pc-windows-gnu
 
       - name: Install cross-compilation dependencies (Windows)
+        continue-on-error: true
+        timeout-minutes: 5
         run: sudo apt-get update && sudo apt-get install -y mingw-w64
 
       - name: Build release
+        if: always()
         run: cargo build --release --target x86_64-pc-windows-gnu
 
       - name: Package Windows binary
+        if: success()
         run: |
           mkdir -p dist
           cp target/x86_64-pc-windows-gnu/release/ccat.exe dist/
@@ -73,6 +78,7 @@ jobs:
           cd ..
 
       - name: Upload release assets
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
