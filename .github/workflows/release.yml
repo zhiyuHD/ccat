@@ -103,12 +103,13 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$tarball" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout AUR repository
-        uses: actions/checkout@v4
-        with:
-          repository: ssh://aur@aur.archlinux.org/ccat-rs.git
-          path: aur
-          ssh-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      - name: Clone AUR repository
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          eval "$(ssh-agent -s)"
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" | ssh-add -
+          git clone aur@aur.archlinux.org/ccat-rs.git aur
 
       - name: Update PKGBUILD
         working-directory: aur
