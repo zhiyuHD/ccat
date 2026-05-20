@@ -132,28 +132,19 @@ jobs:
         run: |
           # makepkg not available on runners, generate .SRCINFO manually from PKGBUILD
           source PKGBUILD
-          cat > .SRCINFO <<SRCEOF
-          pkgbase = $pkgname
-          	pkgdesc = $pkgdesc
-          	pkgver = $pkgver
-          	pkgrel = $pkgrel
-          	url = $url
-          	install = $install
-          	license = ${license[@]}
-          	arch = ${arch[@]}
-SRCEOF
-          for dep in "${depends[@]}"; do
-            echo "	depends = $dep" >> .SRCINFO
-          done
-          for dep in "${makedepends[@]}"; do
-            echo "	makedepends = $dep" >> .SRCINFO
-          done
-          for src in "${source[@]}"; do
-            echo "	source = $src" >> .SRCINFO
-          done
-          for chk in "${sha256sums[@]}"; do
-            echo "	sha256sums = $chk" >> .SRCINFO
-          done
+          {
+            echo "pkgbase = $pkgname"
+            echo "	pkgdesc = $pkgdesc"
+            echo "	pkgver = $pkgver"
+            echo "	pkgrel = $pkgrel"
+            echo "	url = $url"
+            for lic in "${license[@]}"; do echo "	license = $lic"; done
+            for a in "${arch[@]}"; do echo "	arch = $a"; done
+            for dep in "${depends[@]}"; do echo "	depends = $dep"; done
+            for dep in "${makedepends[@]}"; do echo "	makedepends = $dep"; done
+            for src in "${source[@]}"; do echo "	source = $src"; done
+            for chk in "${sha256sums[@]}"; do echo "	sha256sums = $chk"; done
+          } > .SRCINFO
 
       - name: Commit and push
         working-directory: aur
