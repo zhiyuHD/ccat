@@ -97,7 +97,7 @@ fn colorize_ips(line: &str) -> String {
             // Simple heuristic: x.x.x.x
             let mut is_ip = true;
             let mut parts = 0;
-            for (j, &b) in bytes[i..].iter().enumerate() {
+            for (_j, &b) in bytes[i..].iter().enumerate() {
                 if b == b'.' {
                     parts += 1;
                 } else if !b.is_ascii_digit() {

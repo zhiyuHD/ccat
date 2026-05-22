@@ -27,7 +27,7 @@ pub enum PageAction {
     Next(usize),     // +n lines
     Prev(usize),     // -n lines
     Goto(usize),     // go to page
-    Search(String),  // search forward
+    Search,  // search forward
     Quit,
     None,
 }
@@ -84,7 +84,7 @@ impl PagerState {
                 true
             }
             PageAction::Quit => false,
-            PageAction::Search(_) => true, // handled by caller
+            PageAction::Search => true, // handled by caller
             PageAction::None => true,
         }
     }
@@ -118,7 +118,7 @@ pub fn parse_key(raw: &[u8]) -> PageAction {
         [b'p'] => PageAction::Prev(1),
         [b'g'] => PageAction::Goto(0),
         [b'G'] => PageAction::Goto(usize::MAX),
-        [b'/'] => PageAction::Search(String::new()),
+        [b'/'] => PageAction::Search,
         _ => PageAction::None,
     }
 }
@@ -159,7 +159,7 @@ pub fn read_search_query() -> String {
 /// Render status bar for the pager.
 pub fn status_bar(
     state: &PagerState,
-    items: &[String],
+    _items: &[String],
 ) {
     let (_, w) = terminal_size();
     let (start, end) = state.range();
@@ -229,7 +229,7 @@ pub fn run_pager(items: &[String]) {
 
         let mut handled = false;
 
-        if let PageAction::Search(_) = &action {
+        if let PageAction::Search = &action {
             let query = read_search_query();
             if query.is_empty() {
                 continue;

@@ -197,7 +197,6 @@ pub fn cat_markdown(data: &[u8]) {
                 TagEnd::Table => {
                     // Push final row if any
                     flush_table_cell(&mut current_cell, &mut current_row, &mut table_header, &mut table_rows, &mut in_table_head);
-                    in_table_head = false;
                     // Render the collected table with aligned columns
                     if !table_header.is_empty() || !table_rows.is_empty() {
                         let all_rows: Vec<&Vec<String>> = table_rows.iter().collect();

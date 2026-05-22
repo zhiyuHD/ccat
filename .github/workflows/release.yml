@@ -55,42 +55,34 @@ jobs:
 
   release-windows:
     name: Build Windows
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (MSVC)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu
-
-      - name: Install cross-compilation dependencies (Windows)
-        timeout-minutes: 3
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64
+          targets: x86_64-pc-windows-msvc
 
       - name: Build release
-        if: always()
-        run: cargo build --release --target x86_64-pc-windows-gnu
+        shell: bash
+        run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Package Windows binary
-        if: success()
+        shell: bash
         run: |
           mkdir -p dist
-          cp target/x86_64-pc-windows-gnu/release/ccat.exe dist/
-          cd dist
-          7z a ../ccat-x86_64-pc-windows-gnu.zip *
-          cd ..
+          cp target/x86_64-pc-windows-msvc/release/ccat.exe dist/
+          7z a ccat-x86_64-pc-windows-msvc.zip ./dist/*
 
       - name: Upload release assets
-        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           tag=${{ github.event.release.tag_name }}
-          gh release upload "$tag" ccat-x86_64-pc-windows-gnu.zip --clobber
+          gh release upload "$tag" ccat-x86_64-pc-windows-msvc.zip --clobber
 
   aur:
     name: Publish to AUR

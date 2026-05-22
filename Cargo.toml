@@ -1,6 +1,6 @@
 [package]
 name = "ccat"
-version = "0.2.1"
+version = "0.2.3"
 edition = "2024"
 
 [dependencies]
@@ -14,7 +14,7 @@ infer = "0.19"
 pulldown-cmark = "0.13"
 
 # Syntax highlighting for code blocks
-syntect = { version = "5", default-features = false, features = ["default-onig"] }
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 
 # Terminal colors
 termcolor = "1"

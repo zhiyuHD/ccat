@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use clap::CommandFactory;
-use clap_complete::{Generator, Shell};
+use clap_complete::Shell;
 use flate2::read::GzDecoder;
 
 mod cat_markdown;
@@ -463,7 +463,7 @@ pub fn cat_hex(data: &[u8]) {
                         current_page -= 1;
                     }
                 }
-                pager::PageAction::None | pager::PageAction::Search(_) | pager::PageAction::Goto(_) => {}
+                pager::PageAction::None | pager::PageAction::Search | pager::PageAction::Goto(_) => {}
             }
         } else {
             break;
