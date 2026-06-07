@@ -25,6 +25,7 @@ mod cat_source;
 mod cat_html;
 mod cat_follow;
 mod serve;
+mod cat_tree;
 mod pager;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
@@ -88,6 +89,18 @@ struct Cli {
     /// Start HTTP server to serve files as HTML (e.g. --serve 8080)
     #[arg(long = "serve", value_name = "PORT")]
     serve: Option<u16>,
+
+    /// Display directory as a tree with file types, sizes, and line counts
+    #[arg(short = 'r', long = "tree")]
+    tree: bool,
+
+    /// In --tree mode: also show hidden files (dotfiles)
+    #[arg(long = "all", requires = "tree")]
+    show_all: bool,
+
+    /// In --tree mode: maximum recursion depth (default: unlimited)
+    #[arg(long = "depth", value_name = "N", requires = "tree")]
+    tree_depth: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -845,6 +858,17 @@ fn main() {
             eprintln!("\x1b[2mccat: {}: following {} (--lines {})\x1b[0m", file, desc, cli.lines);
             if let Err(e) = cat_follow::cat_follow(file, kind, cli.lines) {
                 eprintln!("ccat: {file}: {e}");
+            }
+        }
+        return;
+    }
+
+    // Tree mode
+    if cli.tree {
+        for dir in &cli.files {
+            match cat_tree::print_tree(dir, cli.tree_depth, cli.show_all) {
+                Ok(()) => {}
+                Err(e) => eprintln!("ccat: --tree {dir}: {e}"),
             }
         }
         return;
