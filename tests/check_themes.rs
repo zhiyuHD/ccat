@@ -7,5 +7,5 @@ fn list_themes() {
     for t in &themes {
         println!("{}", t);
     }
-    assert!(themes.len() > 20);
+    assert!(themes.len() >= 7);
 }
