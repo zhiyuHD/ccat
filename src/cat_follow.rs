@@ -1,11 +1,33 @@
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
 use crate::FileKind;
+
+/// Get a file identity token for rotation detection.
+/// On Unix this is the inode; on Windows we hash (modified_time + len).
+#[cfg(unix)]
+fn file_identity(metadata: &fs::Metadata) -> u64 {
+    metadata.ino()
+}
+
+#[cfg(not(unix))]
+fn file_identity(metadata: &fs::Metadata) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mtime = match metadata.modified() {
+        Ok(t) => t,
+        Err(_) => return 0,
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    mtime.hash(&mut hasher);
+    metadata.len().hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Minimum poll interval in milliseconds.
 const POLL_MS: u64 = 250;
@@ -96,12 +118,12 @@ fn seek_to_last_n_lines(mut file: &fs::File, n: usize) -> io::Result<u64> {
     Ok(0)
 }
 
-/// Detect file rotation by checking inode changes.
-fn check_rotation(path: &str, prev_ino: u64) -> Option<u64> {
+/// Detect file rotation by checking file identity changes.
+fn check_rotation(path: &str, prev_id: u64) -> Option<u64> {
     fs::metadata(path)
         .ok()
-        .map(|m| m.ino())
-        .filter(|&ino| ino != prev_ino)
+        .map(|m| file_identity(&m))
+        .filter(|&id| id != prev_id)
 }
 
 /// Follow a file, displaying new content as it's written.
@@ -120,7 +142,7 @@ pub fn cat_follow(path: &str, kind: FileKind, lines: usize) -> io::Result<()> {
 
     let metadata = file.metadata()?;
     let mut prev_size = metadata.len();
-    let mut prev_ino = metadata.ino();
+    let mut prev_id = file_identity(&metadata);
 
     // Phase 1: Show initial content (last N lines)
     if lines > 0 && prev_size > 0 {
@@ -150,7 +172,7 @@ pub fn cat_follow(path: &str, kind: FileKind, lines: usize) -> io::Result<()> {
         thread::sleep(Duration::from_millis(poll_ms));
 
         // Check for file rotation first
-        if let Some(new_ino) = check_rotation(path, prev_ino) {
+        if let Some(new_id) = check_rotation(path, prev_id) {
             // File was rotated — reopen and show new content
             file = fs::File::open(path_obj).map_err(|e| {
                 eprintln!("ccat: {path} (rotated): {e}");
@@ -158,7 +180,7 @@ pub fn cat_follow(path: &str, kind: FileKind, lines: usize) -> io::Result<()> {
             })?;
             let new_metadata = file.metadata()?;
             let new_size = new_metadata.len();
-            prev_ino = new_ino;
+            prev_id = new_id;
             prev_size = new_size;
 
             // Print rotation notice to stderr
@@ -307,15 +329,15 @@ mod tests {
         let path = dir.join("rotate_test.log");
 
         fs::write(&path, b"original").unwrap();
-        let ino1 = fs::metadata(&path).unwrap().ino();
+        let id1 = super::file_identity(&fs::metadata(&path).unwrap());
 
         // Recreate file (simulate rotation)
         fs::write(&path, b"new content").unwrap();
-        let _ino2 = fs::metadata(&path).unwrap().ino();
+        let _id2 = super::file_identity(&fs::metadata(&path).unwrap());
 
         // On some filesystems (e.g. tmpfs) inode may change,
         // on others it won't (ext4 with same name = same inode if truncated)
-        let result = check_rotation(&path.to_string_lossy(), ino1);
+        let result = check_rotation(&path.to_string_lossy(), id1);
         // Just verify it doesn't panic
         assert!(result.is_none() || result.is_some());
 
