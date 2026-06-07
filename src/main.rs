@@ -106,6 +106,10 @@ struct Cli {
     /// Color scheme: auto (default), dark, light
     #[arg(long = "color-scheme", value_name = "SCHEME", default_value = "auto")]
     color_scheme: String,
+
+    /// Side-by-side diff view (requires --diff)
+    #[arg(long = "side-by-side", requires = "diff")]
+    side_by_side: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -791,7 +795,11 @@ fn main() {
                 return;
             }
         };
-        cat_diff::cat_diff(&data, &paths[0], &paths[1]);
+        if cli.side_by_side {
+            cat_diff::cat_diff_sxs(&data, &paths[0], &paths[1]);
+        } else {
+            cat_diff::cat_diff(&data, &paths[0], &paths[1]);
+        }
         return;
     }
 
