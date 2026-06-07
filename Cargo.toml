@@ -1,6 +1,6 @@
 [package]
 name = "ccat"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 
 [dependencies]
@@ -59,3 +59,8 @@ regex-lite = "0.1"
 
 # Shell completion generation
 clap_complete = "4"
+atty = "0.2.14"
+temp-env = "0.3.6"
+
+[dev-dependencies]
+syntect = "5"

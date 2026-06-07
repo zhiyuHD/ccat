@@ -26,6 +26,7 @@ mod cat_html;
 mod cat_follow;
 mod serve;
 mod cat_tree;
+mod color_scheme;
 mod pager;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
@@ -101,6 +102,10 @@ struct Cli {
     /// In --tree mode: maximum recursion depth (default: unlimited)
     #[arg(long = "depth", value_name = "N", requires = "tree")]
     tree_depth: Option<usize>,
+
+    /// Color scheme: auto (default), dark, light
+    #[arg(long = "color-scheme", value_name = "SCHEME", default_value = "auto")]
+    color_scheme: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -737,9 +742,20 @@ fn main() {
     if std::env::var("NO_COLOR").is_ok() && !std::env::var("NO_COLOR").unwrap_or_default().is_empty() {
         // SAFETY: Setting TERM before any color output is safe
         unsafe { std::env::set_var("TERM", "dumb"); }
-    }
+ }
 
-    let _force_ascii = cli.ascii;
+ // Initialize color scheme based on CLI arg or auto-detection
+ {
+ let cs = cli.color_scheme.to_lowercase();
+ let theme = match cs.as_str() {
+     "dark" => Some(color_scheme::Theme::Dark),
+     "light" => Some(color_scheme::Theme::Light),
+     _ => None, // auto
+ };
+ color_scheme::force_theme(theme);
+ }
+
+ let _force_ascii = cli.ascii;
     let _force_binary = cli.binary;
     let _show_type = cli.show_type;
     let number = cli.number;

@@ -29,8 +29,13 @@ fn style_to_ansi(style: &Style, text: &str) -> String {
 /// plain text if no matching syntax is found.
 pub fn cat_source(data: &[u8], filename_hint: &str) {
     let ss = SyntaxSet::load_defaults_newlines();
+    // Choose syntect theme based on terminal color scheme
+    let theme_name = crate::color_scheme::syntect_theme_name();
     let ts = ThemeSet::load_defaults();
-    let theme = &ts.themes["base16-ocean.dark"];
+    let theme = ts
+        .themes
+        .get(theme_name)
+        .unwrap_or_else(|| &ts.themes["base16-ocean.dark"]);
 
     let syntax = ss
         .find_syntax_by_extension(

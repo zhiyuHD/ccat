@@ -3,21 +3,19 @@ use std::io;
 use std::io::Read;
 use std::path::Path;
 
-/// Style constants for tree display.
-const STYLE_DIR: &str = "\x1b[1;36m";     // bold cyan
-const STYLE_SYM: &str = "\x1b[1;33m";     // bold yellow
-const STYLE_CODE: &str = "\x1b[33m";      // yellow
-const STYLE_IMG: &str = "\x1b[35m";       // magenta
-const STYLE_DATA: &str = "\x1b[32m";      // green
-const STYLE_BIN: &str = "\x1b[31m";       // red
-const STYLE_ARCHIVE: &str = "\x1b[94m";   // bright blue
-const STYLE_MEDIA: &str = "\x1b[95m";     // bright magenta
-const STYLE_DIM: &str = "\x1b[2m";
-const STYLE_RESET: &str = "\x1b[0m";
+/// Get dim style for current theme.
+fn dim_style() -> &'static str {
+    crate::color_scheme::dim_style()
+}
+
+/// Get reset style for current theme.
+fn reset_style() -> &'static str {
+    crate::color_scheme::reset_style()
+}
 
 /// Simple file type categories for tree display.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum FileCategory {
+pub enum FileCategory {
     Directory,
     Symlink,
     SourceCode,
@@ -181,17 +179,7 @@ fn classify(path: &Path) -> FileCategory {
 
 /// Style string for a file category.
 fn style_for(cat: FileCategory) -> &'static str {
-    match cat {
-        FileCategory::Directory => STYLE_DIR,
-        FileCategory::Symlink => STYLE_SYM,
-        FileCategory::SourceCode | FileCategory::Script => STYLE_CODE,
-        FileCategory::Image => STYLE_IMG,
-        FileCategory::Config | FileCategory::MarkdownDoc => STYLE_DATA,
-        FileCategory::Archive => STYLE_ARCHIVE,
-        FileCategory::Media => STYLE_MEDIA,
-        FileCategory::Binary => STYLE_BIN,
-        FileCategory::Data | FileCategory::Plain => "",
-    }
+    crate::color_scheme::style_for(cat)
 }
 
 /// Category label string.
@@ -228,6 +216,10 @@ fn render_tree(
         }
     }
 
+    // Use theme-adapted styles
+    let dim = dim_style();
+    let reset = reset_style();
+
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -246,7 +238,7 @@ fn render_tree(
     let extra = if cat == FileCategory::Symlink {
         // Show symlink target
         if let Ok(target) = fs::read_link(path) {
-            format!("{STYLE_DIM} → {}{STYLE_RESET}", target.display())
+            format!("{dim} → {}{reset}", target.display())
         } else {
             String::new()
         }
@@ -257,9 +249,9 @@ fn render_tree(
             .map(|entries| entries.filter_map(|e| e.ok()).count())
             .unwrap_or(0);
         if count > 0 {
-            format!("{STYLE_DIM} ({count} items){STYLE_RESET}")
+            format!("{dim} ({count} items){reset}")
         } else {
-            format!("{STYLE_DIM} (empty){STYLE_RESET}")
+            format!("{dim} (empty){reset}")
         }
     } else if let Some(meta) = meta {
         let size = human_size(meta.len());
@@ -283,14 +275,14 @@ fn render_tree(
         } else {
             format!(" · {label}")
         };
-        format!("{STYLE_DIM} ({size}{label_str}{lines_str}){STYLE_RESET}")
+        format!("{dim} ({size}{label_str}{lines_str}){reset}")
     } else {
         String::new()
     };
 
     // Build the line
     let line = format!(
-        "{prefix}{connector}{style}{}{STYLE_RESET}{extra}",
+        "{prefix}{connector}{style}{}{reset}{extra}",
         file_name
     );
     println!("{line}");
@@ -347,6 +339,10 @@ pub fn print_tree(
     max_depth: Option<usize>,
     show_hidden: bool,
 ) -> io::Result<()> {
+    // Use theme-adapted styles
+    let dim = dim_style();
+    let reset = reset_style();
+
     let path = Path::new(path_str);
     if !path.exists() {
         eprintln!("ccat: {path_str}: No such file or directory");
@@ -360,7 +356,7 @@ pub fn print_tree(
         let meta = fs::metadata(path).ok();
         let size = meta.map(|m| human_size(m.len())).unwrap_or_default();
         let label = label_for(cat);
-        println!("{style}{}{STYLE_RESET}  {STYLE_DIM}({size} · {label}){STYLE_RESET}", path_str);
+        println!("{style}{}{reset}  {dim}({size} · {label}){reset}", path_str);
         return Ok(());
     }
 
@@ -372,8 +368,9 @@ pub fn print_tree(
         .ok()
         .map(|entries| entries.filter_map(|e| e.ok()).count())
         .unwrap_or(0);
+    let style = style_for(FileCategory::Directory);
     println!(
-        "\x1b[1;36m{}{STYLE_RESET}  {STYLE_DIM}({item_count} items){STYLE_RESET}",
+        "{style}{}{reset}  {dim}({item_count} items){reset}",
         display_name
     );
 
