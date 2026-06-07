@@ -21,6 +21,10 @@ mod cat_yaml;
 mod cat_log;
 mod cat_csv;
 mod cat_toml;
+mod cat_source;
+mod cat_html;
+mod cat_follow;
+mod serve;
 mod pager;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
@@ -68,8 +72,25 @@ struct Cli {
     /// Apply sed-like substitution (e.g. s/foo/bar/)
     #[arg(short = 'e', long = "edit", value_name = "expression")]
     edit: Option<String>,
+
+    /// Follow mode: watch file for changes (like tail -f)
+    #[arg(short = 'f', long = "follow")]
+    follow: bool,
+
+    /// In follow mode: start from the last N lines
+    #[arg(long = "lines", value_name = "N", default_value_t = 10, requires = "follow")]
+    lines: usize,
+
+    /// Generate HTML output for browser viewing
+    #[arg(long = "html")]
+    html: bool,
+
+    /// Start HTTP server to serve files as HTML (e.g. --serve 8080)
+    #[arg(long = "serve", value_name = "PORT")]
+    serve: Option<u16>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum FileKind {
     Markdown,
     Docx,
@@ -83,6 +104,7 @@ enum FileKind {
     Toml,
     Csv,
     Log,
+    SourceCode,
     PlainText,
 }
 
@@ -201,12 +223,41 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
         let lower = sample.to_lowercase();
         let log_keywords = ["error", "warn", "info", "debug", "trace", "fatal", "panic"];
         let has_level = log_keywords.iter().any(|k| lower.contains(k));
-        let has_timestamp = sample.contains(|c: char| c.is_ascii_digit()) && (sample.contains('-') || sample.contains(':'));
+        let has_timestamp = sample.contains(|c: char| c.is_ascii_digit())
+            && (sample.contains('-') || sample.contains(':'));
         if has_level || has_timestamp {
             return FileKind::Log;
         }
     }
 
+    // Detect source code by extension
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_lowercase();
+        let source_extensions = [
+            "rs", "py", "js", "ts", "jsx", "tsx", "go", "rb", "java", "kt", "scala",
+            "swift", "c", "h", "cpp", "hpp", "cc", "cxx", "hh", "hxx", "c++", "h++",
+            "cs", "fs", "fsx", "clj", "cljs", "lisp", "cl", "el", "scm", "rkt",
+            "hs", "lhs", "ex", "exs", "erl", "hrl", "elm", "nim", "cr", "d",
+            "php", "pl", "pm", "t", "pod", "ps1", "psm1", "bat", "sh", "bash", "zsh",
+            "awk", "sed", "sql", "r", "m", "mm", "pas", "inc",
+            "sass", "scss", "less", "styl", "css",
+            "dockerfile", "cmake", "makefile", "gnumakefile",
+        ];
+        if source_extensions.contains(&ext_lower.as_str()) {
+            return FileKind::SourceCode;
+        }
+        // Check by base name (Dockerfile, Makefile, etc.)
+        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+            let fname_lower = fname.to_lowercase();
+            let exact_names = [
+                "dockerfile", "makefile", "cmakelists.txt", "justfile",
+                "gemfile", "rakefile", "snakefile",
+            ];
+            if exact_names.contains(&fname_lower.as_str()) {
+                return FileKind::SourceCode;
+            }
+        }
+    }
     FileKind::PlainText
 }
 
@@ -623,6 +674,7 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, 
         FileKind::Toml => cat_toml::cat_toml(&data),
         FileKind::Csv => cat_csv::cat_csv(&data),
         FileKind::Log => cat_log::cat_log(&data),
+        FileKind::SourceCode => cat_source::cat_source(&data, path),
         FileKind::PlainText => {
             if is_binary(&data) {
                 if !show_type {
@@ -685,6 +737,18 @@ fn main() {
     // Processing flags apply to plain text output
     let has_opts = number || number_nonblank || squeeze || edit.is_some();
 
+    // Serve mode: start HTTP server
+    if let Some(port) = cli.serve {
+        if cli.files.is_empty() {
+            eprintln!("ccat: --serve requires at least one file path");
+            return;
+        }
+        if let Err(e) = serve::serve_files(&cli.files, port) {
+            eprintln!("ccat: --serve: {e}");
+        }
+        return;
+    }
+
     // Diff mode
     if let Some(paths) = cli.diff {
         if paths.len() != 2 {
@@ -742,6 +806,7 @@ fn main() {
                 FileKind::Toml => cat_toml::cat_toml(&buf),
                 FileKind::Csv => cat_csv::cat_csv(&buf),
                 FileKind::Log => cat_log::cat_log(&buf),
+                FileKind::SourceCode => cat_source::cat_source(&buf, "stdin"),
                 FileKind::PlainText => {
                     if is_binary(&buf) {
                         if !show_type {
@@ -756,11 +821,56 @@ fn main() {
         return;
     }
 
+    // Follow mode
+    if cli.follow {
+        if cli.files.is_empty() {
+            eprintln!("ccat: --follow requires a file path");
+            return;
+        }
+        for file in &cli.files {
+            // Do a quick read of the first bytes to detect file type
+            let data = match fs::read(file) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("ccat: {file}: {e}");
+                    continue;
+                }
+            };
+            if data.is_empty() {
+                eprintln!("ccat: {file}: empty file, nothing to follow");
+                continue;
+            }
+            let kind = detect_kind(&data, Path::new(file));
+            let desc = describe_kind(&data, Path::new(file));
+            eprintln!("\x1b[2mccat: {}: following {} (--lines {})\x1b[0m", file, desc, cli.lines);
+            if let Err(e) = cat_follow::cat_follow(file, kind, cli.lines) {
+                eprintln!("ccat: {file}: {e}");
+            }
+        }
+        return;
+    }
+
     for (i, file) in cli.files.iter().enumerate() {
         if i > 0 {
             println!();
         }
-        if let Err(e) = cat_file(file, cli.ascii, cli.binary, cli.show_type, has_opts, number, number_nonblank, squeeze, edit) {
+        if cli.html {
+            // HTML mode: output HTML to stdout
+            let data = match fs::read(file) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("ccat: {file}: {e}");
+                    continue;
+                }
+            };
+            if data.is_empty() {
+                continue;
+            }
+            let path_obj = Path::new(file);
+            let kind = detect_kind(&data, path_obj);
+            let html = cat_html::cat_file_html(&data, kind, path_obj);
+            print!("{html}");
+        } else if let Err(e) = cat_file(file, cli.ascii, cli.binary, cli.show_type, has_opts, number, number_nonblank, squeeze, edit) {
             if e.kind() != io::ErrorKind::Other {
                 // We already printed the error in cat_file
             }

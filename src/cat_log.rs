@@ -13,7 +13,7 @@ pub fn cat_log(data: &[u8]) {
     }
 }
 
-fn highlight_log_line(line: &str) -> String {
+pub fn highlight_log_line(line: &str) -> String {
     let mut out = String::new();
     let mut rest = line;
 
