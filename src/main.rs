@@ -169,6 +169,7 @@ enum FileKind {
     Csv,
     Log,
     SourceCode,
+    UnifiedDiff,
     PlainText,
 }
 
@@ -232,6 +233,13 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
         let s = String::from_utf8_lossy(data);
         if serde_json::from_str::<serde_json::Value>(&s).is_ok() {
             return FileKind::Json;
+        }
+    }
+
+    // Detect unified diff from stdin: git diff (diff --git) or unified diff (--- / +++)
+    if first_nonws == Some(&b'd') || first_nonws == Some(&b'-') {
+        if cat_diff::is_unified_diff(data) {
+            return FileKind::UnifiedDiff;
         }
     }
 
@@ -741,6 +749,7 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, 
         FileKind::Toml => cat_toml::cat_toml(&data),
         FileKind::Csv => cat_csv::cat_csv(&data),
         FileKind::Log => cat_log::cat_log(&data),
+        FileKind::UnifiedDiff => cat_diff::cat_diff_stdin(&data),
         FileKind::SourceCode => cat_source::cat_source(&data, path),
         FileKind::PlainText => {
             if is_binary(&data) {
@@ -949,6 +958,7 @@ fn main() {
                 FileKind::Toml => cat_toml::cat_toml(&buf),
                 FileKind::Csv => cat_csv::cat_csv(&buf),
                 FileKind::Log => cat_log::cat_log(&buf),
+                FileKind::UnifiedDiff => cat_diff::cat_diff_stdin(&buf),
                 FileKind::SourceCode => cat_source::cat_source(&buf, "stdin"),
                 FileKind::PlainText => {
                     if is_binary(&buf) {
@@ -1197,6 +1207,28 @@ mod tests {
         let data = b"2024-06-10 10:30:00 ERROR something broke\n";
         let kind = detect_kind(data, Path::new("unknown"));
         assert_eq!(kind, FileKind::Log, "log by timestamp + error level");
+    }
+
+    #[test]
+    fn test_detect_unified_diff_git() {
+        let data = b"diff --git a/src/main.rs b/src/main.rs\nindex abc..def\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,5 +1,6 @@\n fn main() {\n+    println!(\"hello\");\n }\n";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::UnifiedDiff, "git diff by diff --git header");
+    }
+
+    #[test]
+    fn test_detect_unified_diff_std() {
+        let data = b"--- a/old.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-old\n+new\n";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::UnifiedDiff, "unified diff by ---/+++ headers");
+    }
+
+    #[test]
+    fn test_detect_yaml_not_confused_with_diff() {
+        // Make sure YAML frontmatter (--- without path) is NOT detected as diff
+        let data = b"---\nkey: value\nfoo: bar\n";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::Yaml, "YAML frontmatter should stay YAML, not diff");
     }
 
     #[test]

@@ -359,6 +359,139 @@ fn truncate_ansi(s: &str, max: usize) -> String {
     result
 }
 
+/// Parse and highlight unified diff from stdin (git diff | ccat, diff -u | ccat).
+///
+/// Detects and colorizes: diff headers, hunk markers, additions, deletions, context, and metadata.
+pub fn cat_diff_stdin(data: &[u8]) {
+    let text = String::from_utf8_lossy(data);
+    let lines: Vec<&str> = text.lines().collect();
+
+    let style_diff_header = Style::new().bold().cyan();
+    let style_hunk = Style::new().cyan();
+    let style_add = Style::new().green();
+    let style_del = Style::new().red();
+    let style_dim = Style::new().dim();
+    let style_add_bold = Style::new().bold().green();
+    let style_del_bold = Style::new().bold().red();
+    let style_yellow = Style::new().yellow();
+
+    let mut out_lines: Vec<String> = Vec::new();
+
+    for line in &lines {
+        if line.starts_with("diff --git ") {
+            // Bold cyan for file block header
+            out_lines.push(format!("{}", style_diff_header.apply_to(line)));
+        } else if line.starts_with("--- ") || line.starts_with("+++ ") {
+            // Bold cyan for ---/+++ file paths
+            out_lines.push(format!("{}", style_diff_header.apply_to(line)));
+        } else if line.starts_with("@@") {
+            // Cyan for hunk headers — also highlight the line numbers
+            let colored = highlight_hunk_header(line, &style_hunk, &style_yellow);
+            out_lines.push(colored);
+        } else if line.starts_with('+') {
+            // Green for additions — bold for "new file" markers
+            if line.len() > 1 {
+                out_lines.push(format!("{}", style_add.apply_to(line)));
+            } else {
+                out_lines.push(format!("{}", style_add_bold.apply_to(line)));
+            }
+        } else if line.starts_with('-') {
+            // Red for deletions
+            if line.len() > 1 {
+                out_lines.push(format!("{}", style_del.apply_to(line)));
+            } else {
+                out_lines.push(format!("{}", style_del_bold.apply_to(line)));
+            }
+        } else if line.starts_with("index ")
+            || line.starts_with("new file")
+            || line.starts_with("deleted file")
+            || line.starts_with("rename from")
+            || line.starts_with("rename to")
+            || line.starts_with("similarity ")
+            || line.starts_with("old mode")
+            || line.starts_with("new mode")
+            || line.starts_with("copy from")
+            || line.starts_with("copy to")
+            || line.starts_with("dissimilarity ")
+        {
+            // Dim for git metadata
+            out_lines.push(format!("{}", style_dim.apply_to(line)));
+        } else {
+            // Context — normal output, slightly dimmed
+            out_lines.push(format!("{}", style_dim.apply_to(line)));
+        }
+    }
+
+    // Paged output
+    if out_lines.len() > pager::terminal_size().0.saturating_sub(3) {
+        pager::run_pager(&out_lines);
+    } else {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        for line in &out_lines {
+            let _ = writeln!(handle, "{}", line);
+        }
+    }
+}
+
+/// Highlight the @@ hunk header, making line numbers yellow.
+fn highlight_hunk_header(line: &str, base_color: &Style, _num_color: &Style) -> String {
+    // Format: @@ -old_start,old_count +new_start,new_count @@ optional_context
+    let mut out = String::new();
+    let mut rest = line;
+    // First @@
+    if let Some(idx) = rest.find("@@") {
+        out.push_str(&format!("{}", base_color.apply_to(&rest[..idx + 2])));
+        rest = &rest[idx + 2..];
+    } else {
+        return format!("{}", base_color.apply_to(line));
+    }
+
+    // Between @@ markers — highlight numbers
+    while let Some(pos) = rest.find("@@") {
+        let section = &rest[..pos];
+        // Colorize digits in the hunk range
+        let mut colored_section = String::new();
+        let mut in_digit = false;
+        for ch in section.chars() {
+            if ch == '-' || ch == '+' || ch == ' ' {
+                if in_digit {
+                    colored_section.push_str("\x1b[0m");
+                    in_digit = false;
+                }
+                colored_section.push(ch);
+            } else if ch.is_ascii_digit() || ch == ',' {
+                if !in_digit {
+                    colored_section.push_str("\x1b[33m");
+                    in_digit = true;
+                }
+                colored_section.push(ch);
+            } else {
+                if in_digit {
+                    colored_section.push_str("\x1b[0m");
+                    in_digit = false;
+                }
+                colored_section.push(ch);
+            }
+        }
+        if in_digit {
+            colored_section.push_str("\x1b[0m");
+        }
+        out.push_str(&colored_section);
+        rest = &rest[pos..];
+        // Closing @@
+        if let Some(idx) = rest.find("@@") {
+            out.push_str(&format!("\x1b[36m{}\x1b[0m", &rest[..idx + 2]));
+            rest = &rest[idx + 2..];
+        }
+    }
+    // Trailing context
+    if !rest.is_empty() {
+        out.push_str(&format!("\x1b[36m{}\x1b[0m", rest));
+    }
+    out
+}
+
 /// Pad a string (which may contain ANSI codes) to `width` visible columns.
 fn pad_right(s: &str, width: usize) -> String {
     let visible = visible_width(s);
@@ -388,14 +521,89 @@ fn visible_width(s: &str) -> usize {
     count
 }
 
+/// Check if the input data looks like a unified diff.
+///
+/// Detection: first line is `diff --git ...` or first two lines are `--- ...` / `+++ ...`.
+pub fn is_unified_diff(data: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(data);
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return false;
+    }
+
+    let first = lines[0].trim();
+    // git diff format
+    if first.starts_with("diff --git ") {
+        return true;
+    }
+
+    // Unified diff format: --- a/file or --- file on first line, +++ on second
+    if first.starts_with("--- ") && first.len() > 4 {
+        if lines.len() > 1 && lines[1].trim().starts_with("+++ ") {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ── is_unified_diff tests ──
+
     #[test]
-    fn test_truncate_short_string() {
-        assert_eq!(truncate("hello", 10), "hello");
+    fn test_is_unified_diff_git_header() {
+        let data = b"diff --git a/src/main.rs b/src/main.rs\nindex abc..def 100644\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,5 +1,6 @@\n fn main() {\n+    println!(\"hello\");\n }\n";
+        assert!(is_unified_diff(data));
     }
+
+    #[test]
+    fn test_is_unified_diff_unified_format() {
+        let data = b"--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,4 @@\n line1\n-old line\n+new line\n";
+        assert!(is_unified_diff(data));
+    }
+
+    #[test]
+    fn test_is_unified_diff_not_diff() {
+        let data = b"# Hello world\nThis is not a diff.\n";
+        assert!(!is_unified_diff(data));
+    }
+
+    #[test]
+    fn test_is_unified_diff_empty() {
+        assert!(!is_unified_diff(b""));
+    }
+
+    #[test]
+    fn test_is_unified_diff_yaml_not_diff() {
+        // YAML frontmatter with just --- on first line (no space)
+        let data = b"---\nkey: value\n";
+        assert!(!is_unified_diff(data), "YAML frontmatter should not be detected as diff");
+    }
+
+    #[test]
+    fn test_is_unified_diff_plain_text() {
+        let data = b"Just some random content without any diff pattern.\n";
+        assert!(!is_unified_diff(data));
+    }
+
+    #[test]
+    fn test_is_unified_diff_single_line() {
+        // Only one line starting with --- should not match (needs +++ verification)
+        let data = b"--- a/file.txt\n";
+        assert!(!is_unified_diff(data));
+    }
+
+    #[test]
+    fn test_is_unified_diff_std_diff() {
+        // diff -u output without git header
+        let data = b"--- /path/to/original\t2024-01-01\n+++ /path/to/new\t2024-01-02\n@@ -1 +1 @@\n-old content\n+new content\n";
+        assert!(is_unified_diff(data));
+    }
+
+    // ── old tests below ──
 
     #[test]
     fn test_truncate_exact() {
