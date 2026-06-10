@@ -1,6 +1,6 @@
 [package]
 name = "ccat"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
@@ -57,10 +57,18 @@ lofty = "0.24"
 # Lightweight regex for sed substitution
 regex-lite = "0.1"
 
+# Config file support (TOML deserialization + XDG paths)
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "6"
+
 # Shell completion generation
 clap_complete = "4"
 atty = "0.2.14"
 temp-env = "0.3.6"
+
+# YAML parsing for --schema mode
+serde_yaml = "0.9"
 
 [dev-dependencies]
 syntect = "5"

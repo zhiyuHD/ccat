@@ -25,9 +25,14 @@ mod cat_source;
 mod cat_html;
 mod cat_follow;
 mod serve;
+mod config;
 mod cat_tree;
 mod color_scheme;
+mod cat_elf;
 mod pager;
+mod cat_schema;
+mod cat_search;
+mod cat_inspect;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
 
@@ -110,6 +115,43 @@ struct Cli {
     /// Side-by-side diff view (requires --diff)
     #[arg(long = "side-by-side", requires = "diff")]
     side_by_side: bool,
+
+    /// Syntax highlighting theme for source code (requires source highlighting).
+    /// Use --list-themes to see available options. Overrides auto-detection.
+    #[arg(long = "theme", value_name = "NAME")]
+    theme: Option<String>,
+
+    /// List available syntax highlighting themes and exit.
+    #[arg(long = "list-themes")]
+    list_themes: bool,
+
+    /// ELF binary introspection: show headers, sections, segments, and symbols
+    #[arg(long = "elf")]
+    elf: bool,
+
+    /// Show inferred schema for structured data (JSON, TOML, YAML, CSV)
+    #[arg(long = "schema")]
+    schema: bool,
+
+    /// Show detailed file inspection (type, size, entropy, hash, stats, etc.)
+    #[arg(short = 'i', long = "inspect")]
+    inspect: bool,
+
+    /// Search for regex pattern in files (grep mode)
+    #[arg(short = 'g', long = "search", value_name = "PATTERN", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve"])]
+    search: Option<String>,
+
+    /// Number of context lines for --search (default: 2)
+    #[arg(short = 'C', long = "context", value_name = "N", default_value_t = 2, requires = "search")]
+    context: usize,
+
+    /// Only show match counts per file (with --search)
+    #[arg(short = 'c', long = "count", requires = "search")]
+    count: bool,
+
+    /// Only show filenames with matches (with --search)
+    #[arg(short = 'l', long = "files-with-matches", requires = "search")]
+    files_with_matches: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -195,7 +237,7 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
 
     // Detect YAML: starts with key: value, or ---
     if let Some(&b) = first_nonws {
-        if b == b'-' && data.len() > 3 && data[..3].as_ref() == b"---" {
+        if b == b'-' && data.len() > 3 && &data[..3] == b"---" {
             return FileKind::Yaml;
         }
         if data.iter().take(5).any(|&b| b == b':') {
@@ -268,16 +310,16 @@ fn detect_kind(data: &[u8], path: &Path) -> FileKind {
         if source_extensions.contains(&ext_lower.as_str()) {
             return FileKind::SourceCode;
         }
-        // Check by base name (Dockerfile, Makefile, etc.)
-        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-            let fname_lower = fname.to_lowercase();
-            let exact_names = [
-                "dockerfile", "makefile", "cmakelists.txt", "justfile",
-                "gemfile", "rakefile", "snakefile",
-            ];
-            if exact_names.contains(&fname_lower.as_str()) {
-                return FileKind::SourceCode;
-            }
+    }
+    // Check by base name (Dockerfile, Makefile, etc.) — file may have no extension
+    if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+        let fname_lower = fname.to_lowercase();
+        let exact_names = [
+            "dockerfile", "makefile", "cmakelists.txt", "justfile",
+            "gemfile", "rakefile", "snakefile",
+        ];
+        if exact_names.contains(&fname_lower.as_str()) {
+            return FileKind::SourceCode;
         }
     }
     FileKind::PlainText
@@ -414,7 +456,10 @@ fn is_binary(data: &[u8]) -> bool {
     let sample_len = data.len().min(8192);
     if sample_len == 0 { return false; }
     let nul_count = data.iter().take(8192).filter(|&&b| b == 0).count();
-    let non_printable = data.iter().take(8192).filter(|&&b| b != 0 && !b.is_ascii_graphic() && !b.is_ascii_whitespace()).count();
+    // Exclude bytes >= 0x80 (UTF-8 multi-byte continuation/leading bytes) so
+    // that UTF-8 encoded text like "café" or "日本語" is not falsely flagged
+    // as binary.
+    let non_printable = data.iter().take(8192).filter(|&&b| b != 0 && !b.is_ascii_graphic() && !b.is_ascii_whitespace() && b < 0x80).count();
     // If more than 1% null bytes OR more than 30% non-printable non-null bytes
     nul_count > sample_len / 100 || non_printable > sample_len * 3 / 10
 }
@@ -742,24 +787,61 @@ fn main() {
         return;
     }
 
+    // Handle --list-themes: show available syntect themes and exit
+    if cli.list_themes {
+        let ts = syntect::highlighting::ThemeSet::load_defaults();
+        let mut names: Vec<&String> = ts.themes.keys().collect();
+        names.sort();
+        for name in &names {
+            println!("{name}");
+        }
+        return;
+    }
+
+    // Load config and merge with CLI args (CLI overrides config)
+    let merged = config::MergedConfig::new(
+        &cli.color_scheme,
+        cli.theme.take(),
+        cli.number,
+        cli.number_nonblank,
+        cli.squeeze_blank,
+    );
+    cli.color_scheme = merged.color_scheme;
+    cli.number = merged.number;
+    cli.number_nonblank = merged.number_nonblank;
+    cli.squeeze_blank = merged.squeeze_blank;
+
+    // Store the chosen theme in the state dir so cat_source can read it
+    if let Some(ref theme_name) = merged.theme {
+        let dir = Path::new(STATE_DIR);
+        let _ = fs::create_dir_all(dir);
+        let _ = fs::write(dir.join("theme"), theme_name);
+    } else {
+        // Clear theme override
+        let _ = fs::remove_file(Path::new(STATE_DIR).join("theme"));
+    }
+
     // Respect NO_COLOR
-    if std::env::var("NO_COLOR").is_ok() && !std::env::var("NO_COLOR").unwrap_or_default().is_empty() {
+    if std::env::var("NO_COLOR").is_ok()
+        && !std::env::var("NO_COLOR").unwrap_or_default().is_empty()
+    {
         // SAFETY: Setting TERM before any color output is safe
-        unsafe { std::env::set_var("TERM", "dumb"); }
- }
+        unsafe {
+            std::env::set_var("TERM", "dumb");
+        }
+    }
+    // Initialize color scheme based on CLI arg or auto-detection
+    {
+        let cs = cli.color_scheme.to_lowercase();
+        let theme = match cs.as_str() {
+            "dark" => Some(color_scheme::Theme::Dark),
+            "light" => Some(color_scheme::Theme::Light),
+            _ => None, // auto
+        };
+        color_scheme::force_theme(theme);
+    }
 
- // Initialize color scheme based on CLI arg or auto-detection
- {
- let cs = cli.color_scheme.to_lowercase();
- let theme = match cs.as_str() {
-     "dark" => Some(color_scheme::Theme::Dark),
-     "light" => Some(color_scheme::Theme::Light),
-     _ => None, // auto
- };
- color_scheme::force_theme(theme);
- }
-
- let _force_ascii = cli.ascii;
+    let _force_ascii = cli.ascii;
     let _force_binary = cli.binary;
     let _show_type = cli.show_type;
     let number = cli.number;
@@ -803,10 +885,34 @@ fn main() {
         return;
     }
 
+    // Search mode
+    if let Some(pattern) = cli.search {
+        if cli.files.is_empty() {
+            eprintln!("ccat: --search requires at least one file path");
+            return;
+        }
+        let opts = cat_search::SearchOpts {
+            pattern,
+            context_lines: cli.context,
+            count_only: cli.count,
+            files_with_matches: cli.files_with_matches,
+        };
+        if let Err(e) = cat_search::search_main(&opts, &cli.files) {
+            eprintln!("ccat: --search: {e}");
+        }
+        return;
+    }
+
     if cli.files.is_empty() {
         // Read from stdin
         let mut buf = Vec::new();
         if io::stdin().read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+            // Inspect stdin
+            if cli.inspect {
+                cat_inspect::inspect_stdin(&buf);
+                return;
+            }
+
             let force_ascii = cli.ascii;
             let force_binary = cli.binary;
             let show_type = cli.show_type;
@@ -902,6 +1008,68 @@ fn main() {
         if i > 0 {
             println!();
         }
+
+        // ELF introspection mode
+        if cli.elf {
+            let data = match fs::read(file) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("ccat: {file}: {e}");
+                    continue;
+                }
+            };
+            if data.is_empty() {
+                eprintln!("ccat: {file}: empty file");
+                continue;
+            }
+            cat_elf::cat_elf(&data);
+            continue;
+        }
+
+        // Schema mode
+        if cli.schema {
+            let data = match fs::read(file) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("ccat: {file}: {e}");
+                    continue;
+                }
+            };
+            if data.is_empty() {
+                eprintln!("ccat: {file}: empty file");
+                continue;
+            }
+            cat_schema::print_schema(&data, Path::new(file));
+            continue;
+        }
+
+        // Inspect mode
+        if cli.inspect {
+            let data = if file == "-" {
+                let mut buf = Vec::new();
+                if io::stdin().read_to_end(&mut buf).is_err() || buf.is_empty() {
+                    eprintln!("ccat: stdin: empty");
+                    continue;
+                }
+                buf
+            } else {
+                match fs::read(file) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("ccat: {file}: {e}");
+                        continue;
+                    }
+                }
+            };
+            if data.is_empty() {
+                if file == "-" { continue; }
+                eprintln!("ccat: {file}: empty file");
+                continue;
+            }
+            cat_inspect::inspect_file(&data, Path::new(file));
+            continue;
+        }
+
         if cli.html {
             // HTML mode: output HTML to stdout
             let data = match fs::read(file) {
@@ -923,5 +1091,489 @@ fn main() {
                 // We already printed the error in cat_file
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // ── detect_kind tests ──
+
+    #[test]
+    fn test_detect_markdown() {
+        let data = b"# Hello\n\nThis is a paragraph.\n\n- list item\n";
+        let kind = detect_kind(data, Path::new("test.md"));
+        assert_eq!(kind, FileKind::Markdown, "markdown by heading + list");
+    }
+
+    #[test]
+    fn test_detect_markdown_no_heading_no_match() {
+        let data = b"Just a plain paragraph.\n\n> not a quote?\n";
+        let kind = detect_kind(data, Path::new("test.txt"));
+        assert_eq!(kind, FileKind::PlainText, "no heading = not markdown");
+    }
+
+    #[test]
+    fn test_detect_json_by_extension() {
+        let data = b"{\"key\": \"value\"}";
+        let kind = detect_kind(data, Path::new("data.json"));
+        assert_eq!(kind, FileKind::Json, "json by .json extension");
+    }
+
+    #[test]
+    fn test_detect_json_by_content() {
+        let data = b"{\"name\": \"ccat\", \"version\": 1}";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::Json, "json by leading brace");
+    }
+
+    #[test]
+    fn test_detect_json_array() {
+        let data = b"[1, 2, 3]";
+        let kind = detect_kind(data, Path::new("array.dat"));
+        assert_eq!(kind, FileKind::Json, "json array by leading bracket");
+    }
+
+    #[test]
+    fn test_detect_yaml_by_extension() {
+        let data = b"key: value\nfoo: bar\n";
+        let kind = detect_kind(data, Path::new("config.yaml"));
+        assert_eq!(kind, FileKind::Yaml, "yaml by .yaml extension");
+    }
+
+    #[test]
+    fn test_detect_yaml_doc_separator() {
+        let data = b"---\nkey: value\n";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::Yaml, "yaml by doc separator");
+    }
+
+    #[test]
+    fn test_detect_toml_by_extension() {
+        let data = b"[package]\nname = \"ccat\"\n";
+        let kind = detect_kind(data, Path::new("Cargo.toml"));
+        assert_eq!(kind, FileKind::Toml, "toml by extension");
+    }
+
+    #[test]
+    fn test_detect_toml_heuristic() {
+        let data = b"a: name = \"ccat\"\nversion = \"1.0\"\n";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::Toml, "toml by key = value heuristic");
+    }
+
+    #[test]
+    fn test_detect_csv_by_extension() {
+        let data = b"a,b,c\n1,2,3\n";
+        let kind = detect_kind(data, Path::new("data.csv"));
+        assert_eq!(kind, FileKind::Csv, "csv by extension");
+    }
+
+    #[test]
+    fn test_detect_csv_heuristic() {
+        let data = b"name,age,city\nalice,30,nyc\nbob,25,sf\n";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::Csv, "csv by comma heuristic");
+    }
+
+    #[test]
+    fn test_detect_tsv() {
+        let data = b"name\tage\tcity\nalice\t30\tnyc\n";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::Csv, "tsv by tab heuristic");
+    }
+
+    #[test]
+    fn test_detect_log_file() {
+        let data = b"2024-01-01 12:00:00 [INFO] Server started\n";
+        let kind = detect_kind(data, Path::new("server.log"));
+        assert_eq!(kind, FileKind::Log, "log by extension");
+    }
+
+    #[test]
+    fn test_detect_log_heuristic() {
+        let data = b"2024-06-10 10:30:00 ERROR something broke\n";
+        let kind = detect_kind(data, Path::new("unknown"));
+        assert_eq!(kind, FileKind::Log, "log by timestamp + error level");
+    }
+
+    #[test]
+    fn test_detect_source_rust() {
+        let data = b"fn main() {}\n";
+        let kind = detect_kind(data, Path::new("main.rs"));
+        assert_eq!(kind, FileKind::SourceCode, "rust by extension");
+    }
+
+    #[test]
+    fn test_detect_source_python() {
+        let data = b"import os\n";
+        let kind = detect_kind(data, Path::new("script.py"));
+        assert_eq!(kind, FileKind::SourceCode, "python by extension");
+    }
+
+    #[test]
+    fn test_detect_dockerfile() {
+        let data = b"FROM ubuntu\nRUN apt-get update\n";
+        let kind = detect_kind(data, Path::new("Dockerfile"));
+        assert_eq!(kind, FileKind::SourceCode, "Dockerfile by name");
+    }
+
+    #[test]
+    fn test_detect_gzip_by_magic() {
+        let data = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03compressed";
+        let kind = detect_kind(data, Path::new("file.gz"));
+        assert_eq!(kind, FileKind::Gzip, "gzip by magic bytes");
+    }
+
+    #[test]
+    fn test_detect_plain_text() {
+        let data = b"Just some regular text with no special format";
+        let kind = detect_kind(data, Path::new("readme.txt"));
+        assert_eq!(kind, FileKind::PlainText, "plain text fallback");
+    }
+
+    #[test]
+    fn test_detect_empty_data() {
+        let data = b"";
+        let kind = detect_kind(data, Path::new("empty.txt"));
+        assert_eq!(kind, FileKind::PlainText, "empty data is plain text");
+    }
+
+    #[test]
+    fn test_detect_unknown_extension() {
+        let data = b"some random content here 12345";
+        let kind = detect_kind(data, Path::new("output.bin"));
+        assert_eq!(kind, FileKind::PlainText, "unknown extension + ascii = plain text");
+    }
+
+    // ── is_binary tests ──
+
+    #[test]
+    fn test_is_binary_ascii_text() {
+        let data = b"Hello, this is plain text\nwith multiple lines.\n";
+        assert!(!is_binary(data), "ascii text is not binary");
+    }
+
+    #[test]
+    fn test_is_binary_with_nulls() {
+        let data = b"\x00\x01\x02\x03Hello\x00world";
+        assert!(is_binary(data), "content with nulls is binary");
+    }
+
+    #[test]
+    fn test_is_binary_empty() {
+        let data = b"";
+        assert!(!is_binary(data), "empty is not binary");
+    }
+
+    #[test]
+    fn test_is_binary_unicode_text() {
+        // The UTF-8 multi-byte characters are now excluded from the
+        // non-printable count (bytes >= 0x80 are skipped).
+        let data = "Hello 世界\n".as_bytes();
+        assert!(!is_binary(data), "utf-8 text is not binary");
+    }
+
+    #[test]
+    fn test_is_binary_high_nonprintable() {
+        let mut data = vec![0u8; 100];
+        for i in 0..100 { data[i] = 0x01; }
+        assert!(is_binary(&data), "high non-printable ratio = binary");
+    }
+
+    // ── is_elf tests ──
+
+    #[test]
+    fn test_is_elf_valid_header() {
+        let data: &[u8] = b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        assert!(is_elf(data), "valid ELF header detected");
+    }
+
+    #[test]
+    fn test_is_elf_too_short() {
+        let data: &[u8] = b"\x7fEL";
+        assert!(!is_elf(data), "too short for ELF");
+    }
+
+    #[test]
+    fn test_is_elf_wrong_magic() {
+        let data: &[u8] = b"not an ELF file at all!";
+        assert!(!is_elf(data), "no ELF magic");
+    }
+
+    #[test]
+    fn test_is_elf_empty() {
+        let data: &[u8] = b"";
+        assert!(!is_elf(data), "empty is not ELF");
+    }
+
+    #[test]
+    fn test_is_elf_almost_elf() {
+        let data: &[u8] = b"\x7fELF but it's actually just text";
+        assert!(is_elf(data), "starts with ELF magic");
+    }
+
+    // ── looks_like_markdown tests ──
+
+    #[test]
+    fn test_looks_like_markdown_h1_and_list() {
+        let data = b"# Title\n\n- item 1\n- item 2\n";
+        assert!(looks_like_markdown(data));
+    }
+
+    #[test]
+    fn test_looks_like_markdown_h2_and_code() {
+        let data = b"## Section\n\n```rust\nfn main() {}\n```\n";
+        assert!(looks_like_markdown(data));
+    }
+
+    #[test]
+    fn test_looks_like_markdown_blockquote() {
+        let data = b"# Quote\n\n> This is a quote\n";
+        assert!(looks_like_markdown(data));
+    }
+
+    #[test]
+    fn test_looks_like_markdown_no_heading() {
+        let data = b"Just a paragraph\nwith no heading\n";
+        assert!(!looks_like_markdown(data));
+    }
+
+    #[test]
+    fn test_looks_like_markdown_heading_only() {
+        let data = b"# Heading only\nno markdown constructs\n";
+        assert!(!looks_like_markdown(data), "heading alone = not md");
+    }
+
+    #[test]
+    fn test_looks_like_markdown_empty() {
+        let data = b"";
+        assert!(!looks_like_markdown(data));
+    }
+
+    #[test]
+    fn test_looks_like_markdown_numbered_list() {
+        let data = b"# Steps\n\n1. First\n2. Second\n";
+        assert!(looks_like_markdown(data));
+    }
+
+    #[test]
+    fn test_looks_like_markdown_table() {
+        let data = b"# Data\n\n| Col1 | Col2 |\n|------|------|\n| A    | B    |\n";
+        assert!(looks_like_markdown(data));
+    }
+
+    #[test]
+    fn test_looks_like_markdown_horizontal_rule() {
+        let data = b"# Sections\n\n---\n";
+        assert!(looks_like_markdown(data));
+    }
+
+    // ── describe_kind tests ──
+
+    #[test]
+    fn test_describe_kind_markdown() {
+        let data = b"# Hello\n- list\n";
+        let desc = describe_kind(data, Path::new("test.md"));
+        assert!(desc.contains("markdown"), "should mention markdown, got: {desc}");
+    }
+
+    #[test]
+    fn test_describe_kind_json() {
+        let data = b"{\"a\": 1}";
+        let desc = describe_kind(data, Path::new("test.json"));
+        assert!(desc.contains("JSON"), "should mention JSON, got: {desc}");
+    }
+
+    #[test]
+    fn test_describe_kind_plain_text() {
+        let data = b"plain text here";
+        let desc = describe_kind(data, Path::new("test.txt"));
+        assert!(desc.contains("ASCII text") || desc.contains("text/plain"), "got: {desc}");
+    }
+
+    #[test]
+    fn test_describe_kind_rust_source() {
+        let data = b"fn main() {}";
+        let desc = describe_kind(data, Path::new("main.rs"));
+        assert!(desc.contains("Rust source"), "got: {desc}");
+    }
+
+    // ── readable_file_kind tests ──
+
+    #[test]
+    fn test_readable_file_kind_png() {
+        assert_eq!(readable_file_kind("image/png", Path::new("i.png")), "PNG image");
+    }
+
+    #[test]
+    fn test_readable_file_kind_pdf() {
+        assert_eq!(readable_file_kind("application/pdf", Path::new("doc.pdf")), "PDF document");
+    }
+
+    #[test]
+    fn test_readable_file_kind_docx_vs_zip() {
+        assert_eq!(readable_file_kind("application/zip", Path::new("report.docx")), "Word document");
+        assert_eq!(readable_file_kind("application/zip", Path::new("archive.zip")), "ZIP archive");
+    }
+
+    #[test]
+    fn test_readable_file_kind_mp3() {
+        assert_eq!(readable_file_kind("audio/mpeg", Path::new("song.mp3")), "MP3 audio");
+    }
+
+    #[test]
+    fn test_readable_file_kind_unknown() {
+        assert_eq!(readable_file_kind("application/octet-stream", Path::new("file.bin")), "application/octet-stream");
+    }
+
+    // ── cat_inspect tests ──
+
+    #[test]
+    fn test_shannon_entropy_empty() {
+        assert_eq!(cat_inspect::shannon_entropy(b""), 0.0);
+    }
+
+    #[test]
+    fn test_shannon_entropy_constant() {
+        // All same byte → log2(1) = 0
+        let e = cat_inspect::shannon_entropy(&[0x41; 100]);
+        assert!(e.abs() < 1e-10, "constant input should have ~0 entropy, got {e}");
+    }
+
+    #[test]
+    fn test_shannon_entropy_maximum() {
+        // All 256 bytes evenly → ~8.0 bits/byte
+        let data: Vec<u8> = (0u8..=255).cycle().take(256 * 10).collect();
+        let e = cat_inspect::shannon_entropy(&data);
+        assert!((e - 8.0).abs() < 0.1, "uniform input should have ~8.0 entropy, got {e}");
+    }
+
+    #[test]
+    fn test_shannon_entropy_typical_text() {
+        // English text lower entropy
+        let text = b"The quick brown fox jumps over the lazy dog. ";
+        let e = cat_inspect::shannon_entropy(text);
+        assert!(e > 3.0 && e < 5.5, "English text entropy should be 3-5.5, got {e}");
+    }
+
+    #[test]
+    fn test_detect_encoding_ascii() {
+        assert_eq!(cat_inspect::detect_encoding(b"hello"), "ASCII");
+    }
+
+    #[test]
+    fn test_detect_encoding_utf8() {
+        assert_eq!(cat_inspect::detect_encoding("héllo".as_bytes()), "UTF-8");
+    }
+
+    #[test]
+    fn test_detect_encoding_utf8_bom() {
+        let data = &[0xef, 0xbb, 0xbf, b'h', b'i'];
+        assert_eq!(cat_inspect::detect_encoding(data), "UTF-8 with BOM");
+    }
+
+    #[test]
+    fn test_detect_encoding_utf16le() {
+        let data = &[0xff, 0xfe, b'h', 0x00, b'i', 0x00];
+        assert_eq!(cat_inspect::detect_encoding(data), "UTF-16 LE");
+    }
+
+    #[test]
+    fn test_detect_encoding_utf16be() {
+        let data = &[0xfe, 0xff, 0x00, b'h', 0x00, b'i'];
+        assert_eq!(cat_inspect::detect_encoding(data), "UTF-16 BE");
+    }
+
+    #[test]
+    fn test_detect_encoding_binary() {
+        // Bytes that don't form a BOM and are invalid UTF-8
+        let data = &[0x80, 0x81, 0x82];
+        assert_eq!(cat_inspect::detect_encoding(data), "Binary");
+    }
+
+    #[test]
+    fn test_human_size_bytes() {
+        assert_eq!(cat_inspect::human_size(0), "0 B");
+        assert_eq!(cat_inspect::human_size(1), "1 B");
+    }
+
+    #[test]
+    fn test_human_size_kib() {
+        let s = cat_inspect::human_size(2048);
+        assert!(s.contains("2.0") && s.contains("KiB"), "got: {s}");
+    }
+
+    #[test]
+    fn test_human_size_mib() {
+        let s = cat_inspect::human_size(3 * 1024 * 1024);
+        assert!(s.contains("3.0") && s.contains("MiB"), "got: {s}");
+    }
+
+    #[test]
+    fn test_compute_text_stats_empty() {
+        let s = cat_inspect::compute_text_stats(b"");
+        assert_eq!(s.lines, 0);
+        assert_eq!(s.words, 0);
+        assert_eq!(s.chars, 0);
+    }
+
+    #[test]
+    fn test_compute_text_stats_simple() {
+        let s = cat_inspect::compute_text_stats(b"hello world\nhow are you\n");
+        assert_eq!(s.lines, 2);
+        assert_eq!(s.words, 5);
+        assert_eq!(s.chars, 24); // including newlines
+    }
+
+    #[test]
+    fn test_compute_text_stats_blank_lines() {
+        let s = cat_inspect::compute_text_stats(b"line1\n\n\nline4\n");
+        assert_eq!(s.lines, 4);
+        assert_eq!(s.blank_lines, 2);
+    }
+
+    #[test]
+    fn test_format_structured_info_json() {
+        let data = br#"{"name": "test", "items": [1, 2, 3]}"#;
+        let path = Path::new("test.json");
+        let result = cat_inspect::format_structured_info(data, path);
+        assert!(result.is_some(), "should detect JSON");
+        let (keys, depth, doc_type) = result.unwrap();
+        assert_eq!(keys, 2, "should have 2 keys (name + items)");
+        assert!(depth >= 2, "depth should be >= 2 (root + items array)");
+        assert!(doc_type.contains("JSON"), "should say JSON");
+    }
+
+    #[test]
+    fn test_format_structured_info_yaml() {
+        let data = b"name: test\nversion: 1\n";
+        let path = Path::new("test.yaml");
+        let result = cat_inspect::format_structured_info(data, path);
+        assert!(result.is_some(), "should detect YAML");
+        let (_, _, doc_type) = result.unwrap();
+        assert!(doc_type.contains("YAML"), "should say YAML");
+    }
+
+    #[test]
+    fn test_format_structured_info_toml() {
+        let data = b"[package]\nname = \"test\"\nversion = \"1.0\"\n";
+        let path = Path::new("test.toml");
+        let result = cat_inspect::format_structured_info(data, path);
+        assert!(result.is_some(), "should detect TOML");
+        let (_, _, doc_type) = result.unwrap();
+        assert!(doc_type.contains("TOML"), "should say TOML");
+    }
+
+    #[test]
+    fn test_format_structured_info_plain_text() {
+        // Data that won't parse as JSON, YAML, or TOML
+        // YAML can parse bare strings, so use something that confuses it
+        let data = b"@@@ plain text with special! @@@ no key:value pairs";
+        let path = Path::new("test.txt");
+        let result = cat_inspect::format_structured_info(data, path);
+        assert!(result.is_none(), "plain text should not be detected as structured");
     }
 }

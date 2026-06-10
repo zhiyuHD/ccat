@@ -124,3 +124,56 @@ fn colorize_atom(val: &str) -> String {
     }
     val.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_colorize_atom_number() {
+        let result = colorize_atom("42");
+        assert!(result.contains("\x1b[95m"), "numbers should be magenta");
+        assert!(result.contains("42"));
+    }
+
+    #[test]
+    fn test_colorize_atom_negative_number() {
+        let result = colorize_atom("-17");
+        assert!(result.contains("\x1b[95m"));
+    }
+
+    #[test]
+    fn test_colorize_atom_float() {
+        let result = colorize_atom("3.14");
+        assert!(result.contains("\x1b[95m"));
+    }
+
+    #[test]
+    fn test_colorize_atom_true() {
+        let result = colorize_atom("true");
+        assert!(result.contains("\x1b[36m"), "booleans should be cyan");
+    }
+
+    #[test]
+    fn test_colorize_atom_false() {
+        let result = colorize_atom("false");
+        assert!(result.contains("\x1b[36m"));
+    }
+
+    #[test]
+    fn test_colorize_atom_null() {
+        let result = colorize_atom("null");
+        assert!(result.contains("\x1b[2m"), "null should be dim");
+    }
+
+    #[test]
+    fn test_colorize_atom_string() {
+        let result = colorize_atom("\"hello\"");
+        assert!(result.contains("\x1b[32m"), "strings should be green");
+    }
+
+    #[test]
+    fn test_colorize_atom_unknown() {
+        assert_eq!(colorize_atom("some_word"), "some_word");
+    }
+}

@@ -11,7 +11,7 @@ pub fn cat_toml(data: &[u8]) {
     }
 }
 
-fn highlight_toml_line(line: &str) -> String {
+pub fn highlight_toml_line(line: &str) -> String {
     let trimmed = line.trim_start();
     let indent = &line[..line.len() - trimmed.len()];
 

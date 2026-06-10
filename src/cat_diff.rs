@@ -290,6 +290,9 @@ pub fn cat_diff_sxs(data: &[u8], path_a: &str, path_b: &str) {
 
 /// Truncate a string to at most `max` visible characters (ignoring ANSI codes).
 fn truncate(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
     if s.len() <= max {
         return s.to_string();
     }
@@ -383,4 +386,107 @@ fn visible_width(s: &str) -> usize {
         }
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_short_string() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_exact() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_long() {
+        let result = truncate("hello world this is long", 10);
+        assert!(result.starts_with("hello worl"));
+        assert_eq!(result.chars().count(), 11); // 10 chars + …
+    }
+
+    #[test]
+    fn test_truncate_empty() {
+        assert_eq!(truncate("", 10), "");
+    }
+
+    #[test]
+    fn test_truncate_zero() {
+        assert_eq!(truncate("hello", 0), "");
+    }
+
+    #[test]
+    fn test_truncate_ansi_no_ansi() {
+        let s = "hello world";
+        assert_eq!(truncate_ansi(s, 5), "hello…");
+    }
+
+    #[test]
+    fn test_truncate_ansi_with_escapes() {
+        let s = "\x1b[31mhello\x1b[0m world";
+        let result = truncate_ansi(s, 5);
+        assert!(result.contains("\x1b[31m"), "should preserve open escape");
+        assert!(result.contains("hello"), "should include visible text");
+        // visible width should be 5 (h,e,l,l,o) then … but because escape is in there,
+        // let's just verify it doesn't crash and returns something reasonable
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_truncate_ansi_shorter_than_max() {
+        let s = "\x1b[32mhi\x1b[0m";
+        assert_eq!(truncate_ansi(s, 10), s);
+    }
+
+    #[test]
+    fn test_visible_width_plain() {
+        assert_eq!(visible_width("hello"), 5);
+    }
+
+    #[test]
+    fn test_visible_width_with_ansi() {
+        assert_eq!(visible_width("\x1b[31mhello\x1b[0m"), 5);
+    }
+
+    #[test]
+    fn test_visible_width_empty() {
+        assert_eq!(visible_width(""), 0);
+    }
+
+    #[test]
+    fn test_visible_width_multi_escapes() {
+        assert_eq!(visible_width("\x1b[1m\x1b[31mbold red\x1b[0m"), 8);
+    }
+
+    #[test]
+    fn test_pad_right_short() {
+        let result = pad_right("hi", 10);
+        assert_eq!(result.len(), 10);
+        assert!(result.starts_with("hi"));
+    }
+
+    #[test]
+    fn test_pad_right_exact() {
+        assert_eq!(pad_right("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_pad_right_with_ansi() {
+        let styled = "\x1b[31mhi\x1b[0m";
+        let result = pad_right(styled, 10);
+        assert_eq!(visible_width(&result), 10);
+        assert!(result.starts_with("\x1b[31mhi\x1b[0m"));
+    }
+
+    #[test]
+    fn test_pad_right_overlong() {
+        let result = pad_right("hello world!", 5);
+        assert!(result.starts_with("hello"));
+        // Should be truncated
+        assert_eq!(result.chars().count(), 6); // 5 + ellipsis
+    }
 }

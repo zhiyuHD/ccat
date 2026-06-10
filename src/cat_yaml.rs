@@ -14,7 +14,7 @@ pub fn cat_yaml(data: &[u8]) {
     }
 }
 
-fn highlight_yaml_line(line: &str) -> String {
+pub fn highlight_yaml_line(line: &str) -> String {
     let trimmed = line.trim_start();
     let indent = &line[..line.len() - trimmed.len()];
 

@@ -23,18 +23,40 @@ fn style_to_ansi(style: &Style, text: &str) -> String {
     s
 }
 
+/// Read the user-requested syntect theme name from /tmp/ccat-state/theme.
+/// Returns None if no override is set or the file can't be read.
+pub(crate) fn read_theme_override() -> Option<String> {
+    let path = std::path::Path::new(crate::STATE_DIR).join("theme");
+    if path.exists() {
+        match std::fs::read_to_string(&path) {
+            Ok(s) => {
+                let trimmed = s.trim().to_string();
+                if !trimmed.is_empty() { Some(trimmed) } else { None }
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    }
+}
+
 /// Highlight source code using syntect, auto-detecting language by file extension.
 ///
 /// Uses the filename (or a hint) to determine the syntax, falling back to
 /// plain text if no matching syntax is found.
+///
+/// Theme selection priority:
+/// 1. `--theme` CLI flag (stored in /tmp/ccat-state/theme)
+/// 2. Auto-detected dark/light theme from color_scheme module
 pub fn cat_source(data: &[u8], filename_hint: &str) {
     let ss = SyntaxSet::load_defaults_newlines();
-    // Choose syntect theme based on terminal color scheme
-    let theme_name = crate::color_scheme::syntect_theme_name();
+    // Choose syntect theme: check for CLI/config override first
+    let theme_name = read_theme_override()
+        .unwrap_or_else(|| crate::color_scheme::syntect_theme_name().to_string());
     let ts = ThemeSet::load_defaults();
     let theme = ts
         .themes
-        .get(theme_name)
+        .get(&theme_name)
         .unwrap_or_else(|| &ts.themes["base16-ocean.dark"]);
 
     let syntax = ss
