@@ -33,6 +33,16 @@ mod pager;
 mod cat_schema;
 mod cat_search;
 mod cat_inspect;
+mod cat_chart;
+mod cat_vmmap;
+mod cat_proc;
+mod cat_net;
+
+mod cat_cpu;
+
+mod cat_disk;
+
+mod cat_cgroup;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
 
@@ -152,6 +162,84 @@ struct Cli {
     /// Only show filenames with matches (with --search)
     #[arg(short = 'l', long = "files-with-matches", requires = "search")]
     files_with_matches: bool,
+
+    /// Render data as an ASCII chart (auto-detect bar/line from data shape).
+    #[arg(long = "chart", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "vmmap", "meminfo"])]
+    chart: bool,
+
+    /// Chart type: bar or line (default: auto-detect)
+    #[arg(long = "chart-type", value_name = "TYPE", requires = "chart")]
+    chart_type: Option<String>,
+
+    /// Column name to use as X-axis labels (for --chart)
+    #[arg(long = "chart-x", value_name = "COLUMN", requires = "chart")]
+    chart_x: Option<String>,
+
+    /// Column name(s) to use as Y-axis values (for --chart)
+    #[arg(long = "chart-y", value_name = "COLUMN", requires = "chart")]
+    chart_y: Option<String>,
+
+    /// Show virtual memory map of a process (Linux, from /proc/<pid>/maps).
+    #[arg(long = "vmmap", value_name = "PID", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "meminfo"])]
+    vmmap: Option<u32>,
+
+    /// Show detailed per-region RSS/PSS/Swap info from /proc/<pid>/smaps (with --vmmap).
+    #[arg(long = "vmmap-detailed", requires = "vmmap")]
+    vmmap_detailed: bool,
+
+    /// Show system-wide memory summary with pressure indicators (Linux).
+    #[arg(long = "meminfo", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "ps"])]
+    meminfo: bool,
+
+    /// Show process list from /proc (Linux, like ps). Colour-coded with CPU%/MEM%/state.
+    #[arg(long = "ps", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "inspect", "netstat"])]
+    ps: bool,
+
+    /// Sort processes by column: pid, mem, cpu, name, state, ppid, threads, nice (default: pid).
+    /// Prefix with - for reverse order (e.g. -mem).
+    #[arg(long = "ps-sort", value_name = "COL", requires = "ps")]
+    ps_sort: Option<String>,
+
+    /// Only show the process with the given PID (with --ps).
+    #[arg(long = "ps-pid", value_name = "PID", requires = "ps")]
+    ps_pid: Option<u32>,
+
+    /// Show process hierarchy as a tree (with --ps).
+    #[arg(long = "ps-tree", requires = "ps")]
+    ps_tree: bool,
+
+    /// Show network connections from /proc/net (Linux, like ss -tulpn).
+    /// Colour-coded by state with process resolution.
+    #[arg(long = "netstat", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "cpu"])]
+    netstat: bool,
+
+    /// Show CPU topology: cache hierarchy, frequency scaling, flags, interrupts.
+    #[arg(long = "cpu", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat"])]
+    cpu: bool,
+
+    /// Show disk and filesystem information: mounts, usage, I/O stats, ZRAM.
+    #[arg(long = "disk", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu"])]
+    disk: bool,
+
+    /// Show cgroup v2 hierarchy: controllers, PSI, memory and CPU usage by cgroup.
+    #[arg(long = "cgroup", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk"])]
+    cgroup: bool,
+
+    /// Show TCP connections only (with --netstat).
+    #[arg(long = "netstat-tcp", requires = "netstat")]
+    netstat_tcp: bool,
+
+    /// Show UDP connections only (with --netstat).
+    #[arg(long = "netstat-udp", requires = "netstat")]
+    netstat_udp: bool,
+
+    /// Show listening sockets only (with --netstat).
+    #[arg(long = "netstat-listening", requires = "netstat")]
+    netstat_listening: bool,
+
+    /// Filter by PID (with --netstat).
+    #[arg(long = "netstat-pid", value_name = "PID", requires = "netstat")]
+    netstat_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -597,6 +685,26 @@ pub fn cat_hex(data: &[u8]) {
     }
 }
 
+/// Read data, parse as chart dataset, and render to stdout.
+fn render_chart_from_data(data: &[u8], chart_type: &cat_chart::ChartType, x_col: Option<&str>, y_col: Option<&str>) {
+    match cat_chart::parse_chart_data(data, x_col, y_col) {
+        Some(chart_data) => {
+            cat_chart::render_chart(&chart_data, chart_type, None);
+        }
+        None => {
+            // Try showing the raw data with a hint
+            let s = String::from_utf8_lossy(data);
+            if s.len() > 200 {
+                eprintln!("ccat: no numeric data found for charting (showing preview)");
+                let preview: String = s.chars().take(200).collect();
+                eprintln!("{}", preview);
+            } else {
+                eprintln!("ccat: no numeric data found for charting");
+            }
+        }
+    }
+}
+
 fn cat_plain(data: &[u8]) {
     let s = String::from_utf8_lossy(data);
     print!("{s}");
@@ -909,6 +1017,97 @@ fn main() {
         if let Err(e) = cat_search::search_main(&opts, &cli.files) {
             eprintln!("ccat: --search: {e}");
         }
+        return;
+    }
+
+    // Chart mode
+    if cli.chart {
+        let chart_type = match cli.chart_type.as_deref() {
+            None | Some("auto") => cat_chart::ChartType::Bar, // auto = bar for now
+            Some("bar") => cat_chart::ChartType::Bar,
+            Some("line") => cat_chart::ChartType::Line,
+            Some(invalid) => {
+                eprintln!("ccat: unknown chart type '{invalid}', use 'bar' or 'line'");
+                return;
+            }
+        };
+
+        if cli.files.is_empty() {
+            // Read from stdin
+            let mut buf = Vec::new();
+            if io::stdin().read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                render_chart_from_data(&buf, &chart_type, cli.chart_x.as_deref(), cli.chart_y.as_deref());
+            } else {
+                eprintln!("ccat: --chart requires data from file or stdin");
+            }
+        } else {
+            for file in &cli.files {
+                match fs::read(file) {
+                    Ok(data) => {
+                        if !cli.files.is_empty() && cli.files.len() > 1 {
+                            println!("\n\x1b[1m── {} ──\x1b[0m\n", file);
+                        }
+                        render_chart_from_data(&data, &chart_type, cli.chart_x.as_deref(), cli.chart_y.as_deref());
+                    }
+                    Err(e) => {
+                        eprintln!("ccat: {file}: {e}");
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // VMMap mode: show virtual memory map of a process
+    if let Some(pid) = cli.vmmap {
+        cat_vmmap::cat_vmmap(pid, cli.vmmap_detailed);
+        return;
+    }
+
+    // Meminfo mode: show system-wide memory summary
+    if cli.meminfo {
+        cat_vmmap::cat_meminfo();
+        return;
+    }
+
+    // PS mode: show process list
+    if cli.ps {
+        let use_pager = atty::is(atty::Stream::Stdout);
+        if cli.ps_tree {
+            cat_proc::cat_pstree(cli.ps_pid, None, use_pager);
+        } else {
+            cat_proc::cat_ps(cli.ps_sort.as_deref(), cli.ps_pid, None, use_pager);
+        }
+        return;
+    }
+
+    // CPU mode: show CPU topology
+    if cli.cpu {
+        cat_cpu::cat_cpu();
+        return;
+    }
+
+    // Disk mode: show disk and filesystem info
+    if cli.disk {
+        cat_disk::cat_disk();
+        return;
+    }
+
+    // Cgroup mode: show cgroup v2 hierarchy
+    if cli.cgroup {
+        cat_cgroup::cat_cgroup();
+        return;
+    }
+
+    // Netstat mode: show network connections
+    if cli.netstat {
+        let opts = cat_net::NetstatOptions {
+            tcp_only: cli.netstat_tcp,
+            udp_only: cli.netstat_udp,
+            listening_only: cli.netstat_listening,
+            pid_filter: cli.netstat_pid,
+        };
+        cat_net::cat_netstat(&opts);
         return;
     }
 
