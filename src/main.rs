@@ -44,6 +44,17 @@ mod cat_disk;
 
 mod cat_cgroup;
 
+mod cat_health;
+
+mod cat_hex;
+
+mod cat_swap;
+mod cat_fd;
+mod cat_git;
+
+mod cat_qr;
+mod cat_watch;
+
 const STATE_DIR: &str = "/tmp/ccat-state";
 
 /// ccat - An enhanced cat tool with automatic file type detection
@@ -69,6 +80,14 @@ struct Cli {
     /// Display raw bytes (no processing)
     #[arg(short = 'B', long = "binary")]
     binary: bool,
+
+    /// Show hex dump with offset, hex bytes, and ASCII sidebar.
+    #[arg(short = 'x', long = "hex", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "netstat", "cpu", "disk", "cgroup", "health"])]
+    hex: bool,
+
+    /// Hex dump in canonical style (no colors, no pager, pipe-friendly).
+    #[arg(long = "hex-canonical", requires = "hex")]
+    hex_canonical: bool,
 
     /// Show detected file type (like `file` command)
     #[arg(short = 'T', long = "type")]
@@ -218,12 +237,35 @@ struct Cli {
     cpu: bool,
 
     /// Show disk and filesystem information: mounts, usage, I/O stats, ZRAM.
-    #[arg(long = "disk", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu"])]
+    #[arg(long = "disk", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "swap"])]
     disk: bool,
 
     /// Show cgroup v2 hierarchy: controllers, PSI, memory and CPU usage by cgroup.
-    #[arg(long = "cgroup", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk"])]
+    #[arg(long = "cgroup", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "health", "swap"])]
     cgroup: bool,
+
+    /// Show unified system health assessment with scoring (combines memory, CPU,
+    /// pressure, disk, network, and system info into a single health report).
+    #[arg(long = "health", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "swap"])]
+    health: bool,
+
+    /// Show comprehensive swap and ZRAM analysis: usage, compression, I/O, top consumers, pressure correlation.
+    #[arg(long = "swap", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health"])]
+    swap: bool,
+
+    /// Show git objects: blobs, trees, commits, tags, or log for a repo.
+    /// Pass a SHA/ref to display an object, or a path to show the git log.
+    #[arg(long = "git", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap"])]
+    git: bool,
+
+    /// Show file descriptors for a process (Linux, like `ls -l /proc/<pid>/fd`).
+    /// Pass a PID or use --fd-all to show all processes.
+    #[arg(long = "fd", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git"])]
+    fd: Option<u32>,
+
+    /// Show file descriptors for all processes (with --fd).
+    #[arg(long = "fd-all", requires = "fd")]
+    fd_all: bool,
 
     /// Show TCP connections only (with --netstat).
     #[arg(long = "netstat-tcp", requires = "netstat")]
@@ -240,6 +282,46 @@ struct Cli {
     /// Filter by PID (with --netstat).
     #[arg(long = "netstat-pid", value_name = "PID", requires = "netstat")]
     netstat_pid: Option<u32>,
+
+    /// Browse an archive file (zip, tar, deb, rpm, etc.) instead of auto-detecting.
+    /// Pass extra args for file preview or format override.
+    /// Example: ccat --archive pkg.deb          → list contents
+    ///          ccat --archive pkg.deb Makefile  → preview file inside
+    #[arg(long = "archive", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd"])]
+    archive: bool,
+
+    /// Archive format override (e.g. "7z", "rar", "bsdtar").
+    /// Must be used with --archive.
+    #[arg(long = "archive-format", requires = "archive", value_name = "FORMAT")]
+    archive_format: Option<String>,
+
+    /// Generate a QR code from text or piped input.
+    #[arg(
+        short = 'Q',
+        long = "qr",
+        conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd", "archive"]
+    )]
+    qr: bool,
+
+    /// QR error correction level: L (7%), M (15%), Q (25%), H (30%) (default: M)
+    #[arg(long = "qr-ecc", value_name = "LEVEL", default_value = "M", requires = "qr")]
+    qr_ecc: String,
+
+    /// Invert QR code colors (dark on light background)
+    #[arg(long = "qr-invert", requires = "qr")]
+    qr_invert: bool,
+
+    /// Watch mode: refresh output every N seconds (for --ps, --netstat, --health,
+    /// --meminfo, --cpu, --disk, --swap, --cgroup, --fd).
+    /// Press Ctrl-C to exit, same as `watch`.
+    #[arg(short = 'w', long = "watch", value_name = "SECONDS")]
+    watch: Option<u64>,
+
+    /// Watch mode — one-shot: clear screen, run the command once, then exit.
+    /// Like --watch but without the loop. Pair with system modes for a clean
+    /// one-off refresh (--ps, --netstat, --health, etc.).
+    #[arg(long = "watch-once")]
+    watch_once: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -609,80 +691,11 @@ fn check_binary_repeat(path: &str) -> bool {
     trigger
 }
 
+/// Show hex dump with offset, hex bytes, and ASCII sidebar.
+///
+/// Delegates to `cat_hex::cat_hex(data, canonical)`.
 pub fn cat_hex(data: &[u8]) {
-    let mut stdout = io::stdout();
-    let columns = 16;
-    let lines = data.len().div_ceil(columns);
-    let (term_height, _) = pager::terminal_size();
-    let page_lines = term_height.saturating_sub(2).max(5);
-    let total_pages = lines.div_ceil(page_lines);
-    let mut current_page: usize = 0;
-
-    loop {
-        let start_line = current_page * page_lines;
-        let end_line = (start_line + page_lines).min(lines);
-
-        for line_idx in start_line..end_line {
-            let offset = line_idx * columns;
-            let row = &data[offset..data.len().min(offset + columns)];
-            let _ = write!(stdout, "\x1b[2m{:08x}  \x1b[0m", offset);
-
-            for (i, byte) in row.iter().enumerate() {
-                if i == 8 { let _ = write!(stdout, " "); }
-                if *byte == 0 {
-                    let _ = write!(stdout, "\x1b[2m{:02x}\x1b[0m ", byte);
-                } else if byte.is_ascii_graphic() || byte.is_ascii_whitespace() {
-                    let _ = write!(stdout, "\x1b[33m{:02x}\x1b[0m ", byte);
-                } else {
-                    let _ = write!(stdout, "{:02x} ", byte);
-                }
-            }
-
-            let remaining = columns - row.len();
-            if remaining > 0 {
-                if row.len() < 8 { let _ = write!(stdout, " "); }
-                for _ in 0..remaining {
-                    let _ = write!(stdout, "   ");
-                }
-            }
-
-            let _ = write!(stdout, " \x1b[2m|\x1b[0m");
-            for &byte in row {
-                if byte.is_ascii_graphic() || byte == b' ' {
-                    let _ = write!(stdout, "{}", byte as char);
-                } else {
-                    let _ = write!(stdout, "\x1b[2m.\x1b[0m");
-                }
-            }
-            let _ = writeln!(stdout, "\x1b[2m|\x1b[0m");
-        }
-
-        let end_offset = end_line * columns;
-        let _ = writeln!(stdout, "\x1b[2m{:08x}\x1b[0m", end_offset);
-
-        if total_pages > 1 {
-            let action = pager::page_footer(
-                &mut stdout, current_page, total_pages,
-                start_line * columns, end_line * columns, data.len(),
-            );
-            match action {
-                pager::PageAction::Quit => break,
-                pager::PageAction::Next(_) => {
-                    if current_page + 1 < total_pages {
-                        current_page += 1;
-                    }
-                }
-                pager::PageAction::Prev(_) => {
-                    if current_page > 0 {
-                        current_page -= 1;
-                    }
-                }
-                pager::PageAction::None | pager::PageAction::Search | pager::PageAction::Goto(_) => {}
-            }
-        } else {
-            break;
-        }
-    }
+    cat_hex::cat_hex(data, false);
 }
 
 /// Read data, parse as chart dataset, and render to stdout.
@@ -850,7 +863,7 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, 
         FileKind::Gzip => cat_gz(&data),
         FileKind::Image => cat_image::cat_image(&data),
         FileKind::Pdf => cat_pdf::cat_pdf(&data),
-        FileKind::Archive => cat_archive::cat_archive(&data, path),
+        FileKind::Archive => cat_archive::cat_archive(&data, path, &[]),
         FileKind::Media => cat_media::cat_media(&data),
         FileKind::Json => cat_json::cat_json(&data),
         FileKind::Yaml => cat_yaml::cat_yaml(&data),
@@ -969,12 +982,28 @@ fn main() {
     // Processing flags apply to plain text output
     let has_opts = number || number_nonblank || squeeze || edit.is_some();
 
+    // QR code mode
+    if cli.qr {
+        let ecc = match cli.qr_ecc.parse::<cat_qr::EcLevel>() {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("ccat: {e}");
+                return;
+            }
+        };
+
+        let text = if cli.files.is_empty() {
+            None
+        } else {
+            // Join all positional args as the text to encode
+            Some(cli.files.join(" "))
+        };
+        cat_qr::cat_qr(text.as_deref(), ecc, cli.qr_invert);
+        return;
+    }
+
     // Serve mode: start HTTP server
     if let Some(port) = cli.serve {
-        if cli.files.is_empty() {
-            eprintln!("ccat: --serve requires at least one file path");
-            return;
-        }
         if let Err(e) = serve::serve_files(&cli.files, port) {
             eprintln!("ccat: --serve: {e}");
         }
@@ -1058,56 +1087,58 @@ fn main() {
         return;
     }
 
-    // VMMap mode: show virtual memory map of a process
-    if let Some(pid) = cli.vmmap {
-        cat_vmmap::cat_vmmap(pid, cli.vmmap_detailed);
-        return;
-    }
-
-    // Meminfo mode: show system-wide memory summary
-    if cli.meminfo {
-        cat_vmmap::cat_meminfo();
-        return;
-    }
-
-    // PS mode: show process list
-    if cli.ps {
-        let use_pager = atty::is(atty::Stream::Stdout);
-        if cli.ps_tree {
-            cat_proc::cat_pstree(cli.ps_pid, None, use_pager);
+    // ── System diagnostic modes (support --watch / --watch-once) ──
+    if cli.vmmap.is_some() || cli.meminfo || cli.ps || cli.cpu || cli.disk
+        || cli.cgroup || cli.health || cli.swap || cli.git || cli.fd.is_some()
+        || cli.netstat
+    {
+        if let Some(interval) = cli.watch {
+            cat_watch::run_watch(interval, || { run_system_commands(&cli); });
+        } else if cli.watch_once {
+            cat_watch::run_watch_once(|| { run_system_commands(&cli); });
         } else {
-            cat_proc::cat_ps(cli.ps_sort.as_deref(), cli.ps_pid, None, use_pager);
+            run_system_commands(&cli);
         }
         return;
     }
 
-    // CPU mode: show CPU topology
-    if cli.cpu {
-        cat_cpu::cat_cpu();
-        return;
-    }
-
-    // Disk mode: show disk and filesystem info
-    if cli.disk {
-        cat_disk::cat_disk();
-        return;
-    }
-
-    // Cgroup mode: show cgroup v2 hierarchy
-    if cli.cgroup {
-        cat_cgroup::cat_cgroup();
-        return;
-    }
-
-    // Netstat mode: show network connections
-    if cli.netstat {
-        let opts = cat_net::NetstatOptions {
-            tcp_only: cli.netstat_tcp,
-            udp_only: cli.netstat_udp,
-            listening_only: cli.netstat_listening,
-            pid_filter: cli.netstat_pid,
-        };
-        cat_net::cat_netstat(&opts);
+    // Hex dump mode
+    if cli.hex {
+        let canonical = cli.hex_canonical;
+        if cli.files.is_empty() {
+            // Read from stdin
+            let mut buf = Vec::new();
+            if io::stdin().read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                cat_hex::cat_hex(&buf, canonical);
+            } else {
+                eprintln!("ccat: --hex requires input from file or stdin");
+            }
+        } else {
+            for file in &cli.files {
+                let data = if file == "-" {
+                    let mut buf = Vec::new();
+                    match io::stdin().read_to_end(&mut buf) {
+                        Ok(_) => buf,
+                        Err(e) => {
+                            eprintln!("ccat: stdin: {e}");
+                            continue;
+                        }
+                    }
+                } else {
+                    match fs::read(file) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            eprintln!("ccat: {file}: {e}");
+                            continue;
+                        }
+                    }
+                };
+                if !cli.files.is_empty() && cli.files.len() > 1 {
+                    println!("\n\x1b[1m── {} ──\x1b[0m\n", file);
+                }
+                cat_hex::cat_hex(&data, canonical);
+            }
+        }
         return;
     }
 
@@ -1150,7 +1181,7 @@ fn main() {
                 FileKind::Gzip => cat_gz(&buf),
                 FileKind::Image => cat_image::cat_image(&buf),
                 FileKind::Pdf => cat_pdf::cat_pdf(&buf),
-                FileKind::Archive => cat_archive::cat_archive(&buf, "stdin"),
+                FileKind::Archive => cat_archive::cat_archive(&buf, "stdin", &[]),
                 FileKind::Media => cat_media::cat_media(&buf),
                 FileKind::Json => cat_json::cat_json(&buf),
                 FileKind::Yaml => cat_yaml::cat_yaml(&buf),
@@ -1209,6 +1240,36 @@ fn main() {
                 Ok(()) => {}
                 Err(e) => eprintln!("ccat: --tree {dir}: {e}"),
             }
+        }
+        return;
+    }
+
+    // Archive browsing mode: force archive handling regardless of auto-detection
+    if cli.archive {
+        for (i, file) in cli.files.iter().enumerate() {
+            if i > 0 {
+                println!();
+            }
+            let data = match fs::read(file) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("ccat: {file}: {e}");
+                    continue;
+                }
+            };
+            if data.is_empty() {
+                eprintln!("ccat: {file}: empty file");
+                continue;
+            }
+            let mut extra_files: Vec<String> = cli.files.iter()
+                .skip(1)
+                .map(|s| s.to_string())
+                .collect();
+            if let Some(ref fmt) = cli.archive_format {
+                extra_files.insert(0, "--format".to_string());
+                extra_files.insert(1, fmt.clone());
+            }
+            cat_archive::cat_archive(&data, file, &extra_files);
         }
         return;
     }
@@ -1301,6 +1362,106 @@ fn main() {
             }
         }
     }
+}
+
+/// Dispatch a system diagnostic command based on CLI flags.
+///
+/// Returns `true` if one was matched and executed, `false` otherwise.
+/// This is separate from `main()` so it can be called in a watch loop.
+fn run_system_commands(cli: &Cli) -> bool {
+    // VMMap mode: show virtual memory map of a process
+    if let Some(pid) = cli.vmmap {
+        cat_vmmap::cat_vmmap(pid, cli.vmmap_detailed);
+        return true;
+    }
+
+    // Meminfo mode: show system-wide memory summary
+    if cli.meminfo {
+        cat_vmmap::cat_meminfo();
+        return true;
+    }
+
+    // PS mode: show process list (disable pager in watch mode)
+    if cli.ps {
+        let use_pager = atty::is(atty::Stream::Stdout) && cli.watch.is_none();
+        if cli.ps_tree {
+            cat_proc::cat_pstree(cli.ps_pid, None, use_pager);
+        } else {
+            cat_proc::cat_ps(cli.ps_sort.as_deref(), cli.ps_pid, None, use_pager);
+        }
+        return true;
+    }
+
+    // CPU mode: show CPU topology
+    if cli.cpu {
+        cat_cpu::cat_cpu();
+        return true;
+    }
+
+    // Disk mode: show disk and filesystem info
+    if cli.disk {
+        cat_disk::cat_disk();
+        return true;
+    }
+
+    // Cgroup mode: show cgroup v2 hierarchy
+    if cli.cgroup {
+        cat_cgroup::cat_cgroup();
+        return true;
+    }
+
+    // Health mode: unified system health assessment
+    if cli.health {
+        cat_health::cat_health();
+        return true;
+    }
+
+    // Swap mode: comprehensive swap and ZRAM analysis
+    if cli.swap {
+        cat_swap::cat_swap();
+        return true;
+    }
+
+    // Git mode: display git objects or log
+    if cli.git {
+        let input = if cli.files.is_empty() {
+            ".".to_string()
+        } else {
+            cli.files[0].clone()
+        };
+        let opts = cat_git::GitOpts {
+            input,
+            mode: cat_git::GitMode::Auto,
+            show_stat: false,
+        };
+        cat_git::cat_git(&opts);
+        return true;
+    }
+
+    // FD mode: show file descriptors
+    if let Some(pid) = cli.fd {
+        let opts = cat_fd::FdOptions {
+            pid: Some(pid),
+            all_processes: cli.fd_all,
+            ..Default::default()
+        };
+        cat_fd::cat_fd(&opts);
+        return true;
+    }
+
+    // Netstat mode: show network connections
+    if cli.netstat {
+        let opts = cat_net::NetstatOptions {
+            tcp_only: cli.netstat_tcp,
+            udp_only: cli.netstat_udp,
+            listening_only: cli.netstat_listening,
+            pid_filter: cli.netstat_pid,
+        };
+        cat_net::cat_netstat(&opts);
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]

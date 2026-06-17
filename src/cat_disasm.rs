@@ -17,7 +17,7 @@ pub fn disassemble_elf(data: &[u8]) {
                 }
                 _ => {
                     eprintln!("ccat: disassembly not supported for {:?}, showing hex dump", arch);
-                    crate::cat_hex(data);
+                    crate::cat_hex::cat_hex(data, false);
                 }
             }
         }

@@ -50,6 +50,10 @@ lopdf = "0.34"
 # Archive listing
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 tar = "0.4"
+# Additional archive decompression
+brotli = "7"
+xz2 = "0.1"
+zstd = "0.13"
 
 # Audio/Video metadata
 lofty = "0.24"
@@ -69,6 +73,9 @@ temp-env = "0.3.6"
 
 # YAML parsing for --schema mode
 serde_yaml = "0.9"
+
+# QR code generation
+qrcode = "0.14"
 
 [dev-dependencies]
 syntect = "5"
