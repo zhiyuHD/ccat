@@ -49,11 +49,16 @@ mod cat_health;
 mod cat_hex;
 
 mod cat_swap;
+mod cat_oom;
 mod cat_fd;
 mod cat_git;
 
 mod cat_qr;
 mod cat_watch;
+
+mod cat_irq;
+
+mod cat_sched;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
 
@@ -266,6 +271,23 @@ struct Cli {
     /// Show file descriptors for all processes (with --fd).
     #[arg(long = "fd-all", requires = "fd")]
     fd_all: bool,
+
+    /// Show OOM score analysis for all processes (Linux).
+    /// Displays oom_score, oom_score_adj, oom_adj, and RSS for every process,
+    /// sorted by risk. Includes cgroup OOM kill alerts and top-victim analysis.
+    #[arg(long = "oom", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd"])]
+    oom: bool,
+
+    /// Show IRQ and SoftIRQ analysis from /proc/interrupts and /proc/softirqs.
+    /// Displays per-CPU interrupt distribution, sorted by rate, with balance indicators.
+    #[arg(long = "interrupts", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd", "oom", "sched"])]
+    interrupts: bool,
+
+    /// Show comprehensive Linux scheduler analysis: policy distribution, involuntary
+    /// preemption leaders, task migrations, FIFO/RT tasks, cgroup CPU throttling,
+    /// scheduler tunables, and system load overview.
+    #[arg(long = "sched", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd", "oom", "interrupts"])]
+    sched: bool,
 
     /// Show TCP connections only (with --netstat).
     #[arg(long = "netstat-tcp", requires = "netstat")]
@@ -1090,7 +1112,7 @@ fn main() {
     // ── System diagnostic modes (support --watch / --watch-once) ──
     if cli.vmmap.is_some() || cli.meminfo || cli.ps || cli.cpu || cli.disk
         || cli.cgroup || cli.health || cli.swap || cli.git || cli.fd.is_some()
-        || cli.netstat
+        || cli.netstat || cli.oom || cli.interrupts || cli.sched
     {
         if let Some(interval) = cli.watch {
             cat_watch::run_watch(interval, || { run_system_commands(&cli); });
@@ -1458,6 +1480,24 @@ fn run_system_commands(cli: &Cli) -> bool {
             pid_filter: cli.netstat_pid,
         };
         cat_net::cat_netstat(&opts);
+        return true;
+    }
+
+    // OOM mode: show OOM score analysis
+    if cli.oom {
+        cat_oom::cat_oom();
+        return true;
+    }
+
+    // Interrupts mode: show IRQ and SoftIRQ analysis
+    if cli.interrupts {
+        cat_irq::cat_interrupts();
+        return true;
+    }
+
+    // Scheduler analysis mode: show scheduler state
+    if cli.sched {
+        cat_sched::cat_sched();
         return true;
     }
 
