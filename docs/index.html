@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ccat — The Terminal Swiss Army Knife</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #0a0e14;
+    --bg2: #111820;
+    --bg3: #1a2430;
+    --border: #243347;
+    --fg: #b3c4d8;
+    --fg2: #7a92ab;
+    --accent: #67b0e8;
+    --green: #7ec97a;
+    --yellow: #d9b86c;
+    --orange: #e88a5a;
+    --red: #e86a6a;
+    --purple: #b486d6;
+    --cyan: #6ac9d6;
+    --pink: #d67ab8;
+    --hero-start: #0d1520;
+    --hero-end: #0a0e14;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    background: linear-gradient(180deg, var(--hero-start), var(--hero-end));
+    border-bottom: 1px solid var(--border);
+    padding: 100px 24px 80px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(ellipse at 30% 50%, rgba(103,176,232,0.06) 0%, transparent 60%),
+                radial-gradient(ellipse at 70% 50%, rgba(124,201,122,0.04) 0%, transparent 60%);
+    pointer-events: none;
+  }
+
+  .hero-terminal {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    background: rgba(0,0,0,0.5);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 28px;
+    text-align: left;
+    max-width: 600px;
+    margin: 0 auto 40px;
+    position: relative;
+  }
+  .hero-terminal .dots {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .hero-terminal .dots span {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+  .hero-terminal .dots span:nth-child(1) { background: var(--red); }
+  .hero-terminal .dots span:nth-child(2) { background: var(--yellow); }
+  .hero-terminal .dots span:nth-child(3) { background: var(--green); }
+
+  .hero-terminal .prompt { color: var(--green); }
+  .hero-terminal .cmd { color: var(--fg); }
+  .hero-terminal .output { color: var(--fg2); display: block; margin-top: 8px; }
+  .hero-terminal .accent { color: var(--accent); }
+  .hero-terminal .green { color: var(--green); }
+  .hero-terminal .yellow { color: var(--yellow); }
+  .hero-terminal .orange { color: var(--orange); }
+  .hero-terminal .dim { color: var(--fg2); }
+
+  .hero h1 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(48px, 8vw, 80px);
+    font-weight: 800;
+    letter-spacing: -2px;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, var(--accent), var(--green));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p {
+    font-size: 20px;
+    color: var(--fg2);
+    max-width: 640px;
+    margin: 0 auto 32px;
+    line-height: 1.6;
+  }
+  .hero-badges {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid var(--border);
+    background: var(--bg2);
+  }
+  .badge.features { border-color: var(--accent); color: var(--accent); }
+  .badge.lines { border-color: var(--green); color: var(--green); }
+  .badge.lang { border-color: var(--orange); color: var(--orange); }
+  .badge.arch { border-color: var(--purple); color: var(--purple); }
+
+  /* ── Nav ── */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(10,14,20,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+  }
+  nav .inner {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 10px 0;
+    scrollbar-width: none;
+  }
+  nav a {
+    flex-shrink: 0;
+    color: var(--fg2);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    transition: all .15s;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  nav a:hover { color: var(--fg); background: var(--bg2); }
+
+  /* ── Container ── */
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 60px 24px 100px;
+  }
+
+  /* ── Sections ── */
+  .section { margin-bottom: 60px; }
+  .section h2 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--fg);
+  }
+  .section h2 .emoji { margin-right: 10px; }
+  .section .subtitle {
+    color: var(--fg2);
+    margin-bottom: 32px;
+    font-size: 15px;
+  }
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+  }
+
+  .feature-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    transition: all .2s;
+  }
+  .feature-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+  .feature-card .flag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 6px;
+    display: block;
+  }
+  .feature-card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .feature-card p {
+    font-size: 13px;
+    color: var(--fg2);
+    line-height: 1.6;
+  }
+  .feature-card .kv {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--fg2);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .feature-card .kv span { display: inline-flex; align-items: center; gap: 4px; }
+
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 4px;
+    background: var(--bg3);
+    color: var(--fg2);
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid var(--border);
+  }
+  .tag.accent { color: var(--accent); border-color: rgba(103,176,232,0.3); }
+  .tag.green { color: var(--green); border-color: rgba(126,201,122,0.3); }
+  .tag.orange { color: var(--orange); border-color: rgba(232,138,90,0.3); }
+  .tag.purple { color: var(--purple); border-color: rgba(180,134,214,0.3); }
+  .tag.cyan { color: var(--cyan); border-color: rgba(106,201,214,0.3); }
+  .tag.pink { color: var(--pink); border-color: rgba(214,122,184,0.3); }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 48px 0;
+  }
+
+  /* ── Pre / Code blocks ── */
+  .code-block {
+    background: #05080d;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin: 20px 0;
+    overflow: hidden;
+  }
+  .code-block .bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--fg2);
+  }
+  .code-block .bar .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .code-block .bar .dot:nth-child(1) { background: var(--red); }
+  .code-block .bar .dot:nth-child(2) { background: var(--yellow); }
+  .code-block .bar .dot:nth-child(3) { background: var(--green); }
+  .code-block pre {
+    padding: 20px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-x: auto;
+    color: var(--fg);
+    tab-size: 2;
+  }
+
+  /* ── Quick Install ── */
+  .install-box {
+    background: linear-gradient(135deg, var(--bg2), var(--bg3));
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 40px;
+  }
+  .install-box h3 {
+    font-size: 16px;
+    margin-bottom: 16px;
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .install-box code {
+    display: block;
+    padding: 12px 16px;
+    margin: 8px 0;
+    background: rgba(0,0,0,0.4);
+    border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--green);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .install-box .note {
+    font-size: 13px;
+    color: var(--fg2);
+    margin-top: 12px;
+  }
+
+  /* ── Example Section ── */
+  .example {
+    margin: 28px 0;
+  }
+  .example h4 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .example h4 .arrow { color: var(--green); }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    padding: 40px 24px;
+    color: var(--fg2);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+
+  /* ── Responsive ── */
+  @media (max-width: 640px) {
+    .hero { padding: 60px 16px 50px; }
+    .hero-terminal { font-size: 12px; padding: 14px 18px; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .container { padding: 30px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-terminal">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div>
+      <span class="prompt">$ </span><span class="cmd">ccat --health</span>
+      <span class="output">
+  <span class="green">═══ System Health Report ═══</span>
+
+  Overall:  <span class="accent">88/100  🟢GOOD</span>
+
+     Memory <span class="dim">|███████████████░░░░░|  75/100  🔵  44.0%</span>
+        CPU <span class="dim">|████████████████████| 100/100  🟢  load 0.19</span>
+   Pressure <span class="dim">|████████████████████| 100/100  🟢  peak 0.3%</span>
+       Disk <span class="dim">|██████████████░░░░░░|  70/100  🔵  44M reads</span>
+      </span>
+    </div>
+  </div>
+  <h1>ccat</h1>
+  <p>A single binary that replaces a dozen Unix tools — file viewer, system analyzer, debugger, charting engine, QR generator, and more. All in your terminal.</p>
+  <div class="hero-badges">
+    <span class="badge features">✦ 40+ features</span>
+    <span class="badge lines">⟐ ~15K LoC</span>
+    <span class="badge lang">🦀 Rust</span>
+    <span class="badge arch">📦 AUR / crates.io</span>
+    <span class="badge">🐧 Linux</span>
+  </div>
+</section>
+
+<!-- Nav -->
+<nav>
+  <div class="inner">
+    <a href="#install">Install</a>
+    <a href="#file">File Viewer</a>
+    <a href="#system">System Diag</a>
+    <a href="#format">Format Tools</a>
+    <a href="#dev">Dev Tools</a>
+    <a href="#visual">Visual</a>
+    <a href="#utility">Utility</a>
+    <a href="#examples">Examples</a>
+  </div>
+</nav>
+
+<div class="container">
+
+<!-- Install -->
+<section id="install" class="section">
+  <h2><span class="emoji">📦</span>Install</h2>
+  <p class="subtitle">One binary, zero dependencies at runtime.</p>
+
+  <div class="install-box">
+    <h3>⟫ Arch Linux (AUR)</h3>
+    <code>yay -S ccat-rs</code>
+    <p class="note">Also available via <strong>paru</strong>, <strong>yay</strong>, or any AUR helper.</p>
+  </div>
+
+  <div class="install-box">
+    <h3>⟫ From source</h3>
+    <code>git clone https://github.com/zhiyuHD/ccat.git
+cd ccat
+cargo build --release
+cp target/release/ccat ~/.local/bin/</code>
+    <p class="note">Requires Rust 1.80+. Build time: ~2 minutes on modern hardware.</p>
+  </div>
+
+  <div class="install-box">
+    <h3>⟫ Shell completions</h3>
+    <code>ccat --completions bash  &gt; ~/.local/share/bash-completion/completions/ccat
+ccat --completions zsh   &gt; /usr/local/share/zsh/site-functions/_ccat
+ccat --completions fish  &gt; ~/.config/fish/completions/ccat.fish</code>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- File Viewer -->
+<section id="file" class="section">
+  <h2><span class="emoji">📂</span>File Viewer</h2>
+  <p class="subtitle">Auto-detect and render any file format. The core of ccat — what the name implies, pushed way further than plain <code>cat</code>.</p>
+
+  <div class="feature-grid">
+    <div class="feature-card">
+      <span class="flag">— (stdin)</span>
+      <h3>Piped input</h3>
+      <p>Read from stdin with auto-detection. Pipe anything through ccat for syntax-highlighted output.</p>
+      <div class="kv"><span class="tag">stdin</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--ascii / -A</span>
+      <h3>Plain text mode</h3>
+      <p>Force plain text output, skipping all markdown/docx/image processing.</p>
+      <div class="kv"><span class="tag">fallback</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--binary / -B</span>
+      <h3>Raw bytes</h3>
+      <p>Display raw binary output without any processing or interpretation.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--type / -T</span>
+      <h3>File type detection</h3>
+      <p>Show detected file type (like <code>file</code>). Uses magic bytes, extensions, and content heuristics.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--diff / -D</span>
+      <h3>Diff viewer</h3>
+      <p>Compare two files with syntax-highlighted diff output. Supports <code>--side-by-side</code> for parallel view.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--hex / -x</span>
+      <h3>Hex dump</h3>
+      <p>Classic hex dump with offset, hex bytes, and ASCII sidebar. Use <code>--hex-canonical</code> for pipe-friendly output.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--inspect / -i</span>
+      <h3>File inspector</h3>
+      <p>Detailed file analysis: type, size, entropy, hashes (MD5/SHA1/SHA256), permissions, and timestamps.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--follow / -f</span>
+      <h3>Tail follow</h3>
+      <p>Watch file for changes (like <code>tail -f</code>). Configure starting line with <code>--lines N</code>.</p>
+    </div>
+  </div>
+
+  <div class="code-block">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> ccat README.md  — auto-renders markdown</div>
+    <pre><span style="color:#67b0e8">#</span><span style="color:#67b0e8">#</span><span style="color:#67b0e8"> </span><span style="color:#b3c4d8">ccat</span>
+
+<span style="color:#d9b86c">**</span><span style="color:#d9b86c">Enhanced</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">`cat`</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">—</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">auto-detect</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">and</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">render</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">markdown,</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">Word</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">documents,</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">images,</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">and</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">gzip</span><span style="color:#d9b86c"> </span><span style="color:#d9b86c">files.**</span>
+
+<span style="color:#7a92ab">```bash</span>
+<span style="color:#b3c4d8">ccat README.md</span>
+<span style="color:#7a92ab">```</span>
+
+  <span style="color:#7ec97a">✓</span> <span style="color:#7a92ab">Headings, lists, tables, task lists</span>
+  <span style="color:#7ec97a">✓</span> <span style="color:#7a92ab">Syntax-highlighted code blocks (syntect)</span>
+  <span style="color:#7ec97a">✓</span> <span style="color:#7a92ab">Strikethrough, inline code, links</span></pre>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- System Diagnostics -->
+<section id="system" class="section">
+  <h2><span class="emoji">🔬</span>System Diagnostics</h2>
+  <p class="subtitle">A complete Linux system inspection suite. No more juggling <code>ps</code>, <code>ss</code>, <code>free</code>, <code>top</code>, <code>iostat</code>, <code>lsof</code> — it's all in ccat.</p>
+
+  <div class="feature-grid">
+    <div class="feature-card">
+      <span class="flag">--health</span>
+      <h3>System Health</h3>
+      <p>Unified health assessment with scoring (0–100). Combines memory, CPU, pressure, disk, network, swap, ZRAM, and uptime into a single report.</p>
+      <div class="kv"><span class="tag green">★ flagship</span><span class="tag">score</span><span class="tag">PSI</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--meminfo</span>
+      <h3>Memory Analysis</h3>
+      <p>Full <code>/proc/meminfo</code> breakdown: Anon/Cached/Buffers/Slab/PageTables, swap, ZRAM, Huge Pages, commit limit, OOM risk, and page fault counters.</p>
+      <div class="kv"><span class="tag">bar chart</span><span class="tag">OOM%</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--ps</span>
+      <h3>Process List</h3>
+      <p>Color-coded process list (like <code>ps aux</code>). Sort by PID, MEM, CPU, name, state. Filter by PID, show process tree hierarchy.</p>
+      <div class="kv"><span class="tag">--ps-sort</span><span class="tag">--ps-pid</span><span class="tag">--ps-tree</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--cpu</span>
+      <h3>CPU Topology</h3>
+      <p>Full CPU analysis: cache hierarchy (L1–L3 by core), frequency scaling, grouped CPU flags (AVX, SSE, crypto, virtualization), IRQ distribution.</p>
+      <div class="kv"><span class="tag">topology tree</span><span class="tag">flags</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--disk</span>
+      <h3>Disk &amp; Filesystems</h3>
+      <p>Mount table, disk usage per filesystem, and I/O statistics. ZRAM device stats included.</p>
+      <div class="kv"><span class="tag">mounts</span><span class="tag">I/O</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--netstat</span>
+      <h3>Network Connections</h3>
+      <p>Network connections from <code>/proc/net</code> (like <code>ss -tulpn</code>). Filter by TCP/UDP, listening only, or PID. Color-coded by state with process resolution.</p>
+      <div class="kv"><span class="tag">--netstat-tcp</span><span class="tag">--netstat-udp</span><span class="tag">--netstat-pid</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--swap</span>
+      <h3>Swap &amp; ZRAM</h3>
+      <p>Comprehensive swap analysis: usage, compression ratio, I/O rates, top swap consumers, PSI pressure correlation. Algorithm recommendations.</p>
+      <div class="kv"><span class="tag">compression</span><span class="tag">top consumers</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--cgroup</span>
+      <h3>Cgroup v2</h3>
+      <p>Full cgroup v2 hierarchy: active controllers, PSI memory/IO/CPU pressure, memory and CPU usage per cgroup.</p>
+      <div class="kv"><span class="tag">controllers</span><span class="tag">PSI</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--oom</span>
+      <h3>OOM Score Analyzer</h3>
+      <p>Per-process <code>oom_score</code>, <code>oom_score_adj</code>, <code>oom_adj</code>, and RSS. Sorted by risk (red ≥800, orange ≥500). Detects cgroup OOM kills. Top-victim analysis.</p>
+      <div class="kv"><span class="tag orange">risk tiers</span><span class="tag">170 procs</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--fd &lt;PID&gt;</span>
+      <h3>File Descriptors</h3>
+      <p>Per-process fd listing from <code>/proc/&lt;pid&gt;/fd</code>. Classifies by type: regular, socket, pipe, eventpoll. Resolves socket addresses. Detects potential leaks.</p>
+      <div class="kv"><span class="tag">--fd-all</span><span class="tag">type icons</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--vmmap &lt;PID&gt;</span>
+      <h3>Virtual Memory Map</h3>
+      <p>Process memory map from <code>/proc/&lt;pid&gt;/maps</code>. Per-region permissions, offset, device, inode. Add <code>--vmmap-detailed</code> for RSS/PSS/Swap from smaps.</p>
+      <div class="kv"><span class="tag">smaps</span><span class="tag">permissions</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--interrupts</span>
+      <h3>IRQ &amp; SoftIRQ</h3>
+      <p>Per-CPU interrupt distribution from <code>/proc/interrupts</code> and <code>/proc/softirqs</code>. Balance indicators (even/mixed/skewed/pinned), sparkline bars.</p>
+      <div class="kv"><span class="tag">balance</span><span class="tag">4 CPUs</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--sched</span>
+      <h3>Scheduler Analyzer</h3>
+      <p>Linux scheduler deep-dive: policy distribution (OTHER/FIFO/RR/BATCH/IDLE/DEADLINE), involuntary preemption leaders, scheduler tunables, CFS bandwidth.</p>
+      <div class="kv"><span class="tag">policies</span><span class="tag">preemption</span></div>
+    </div>
+  </div>
+
+  <div class="code-block">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> ccat --health — live system health on a Proxmox VM</div>
+    <pre>═══ System Health Report ═══
+
+  Overall:  88/100  🟢GOOD
+
+     Memory |███████████████░░░░░|  75/100  🔵  1.67 GiB available / 3.81 GiB total (44.0%)
+        CPU |████████████████████| 100/100  🟢  load 0.19/0.15/0.13 (4 cores)
+   Pressure |████████████████████| 100/100  🟢  Mild stall pressure (peak 0.3%)
+       Disk |██████████████░░░░░░|  70/100  🔵  1 disk(s): 44M reads, 7M writes
+     System |████████████████████| 100/100  🟢  Up 18d 18h, 170 processes
+    Network |█████████████████░░░|  85/100  🟢  RX 6.12 GiB TX 5.92 GiB
+       ZRAM |█████████████████░░░|  85/100  🟢  1.0x compression
+
+  ✅ All subsystems healthy</pre>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Format Tools -->
+<section id="format" class="section">
+  <h2><span class="emoji">🔄</span>Format &amp; Structured Data</h2>
+  <p class="subtitle">Parse, validate, format, and visualize structured data — JSON, YAML, TOML, CSV, and more.</p>
+
+  <div class="feature-grid">
+    <div class="feature-card">
+      <span class="flag">--json</span>
+      <h3>JSON formatting</h3>
+      <p>Auto-detected JSON with syntax highlighting. Color-coded keys, strings, numbers, booleans, and null values.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--yaml</span>
+      <h3>YAML formatting</h3>
+      <p>Syntax-highlighted YAML output with color-coded keys, strings, and data types.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--toml</span>
+      <h3>TOML formatting</h3>
+      <p>Auto-detected TOML with syntax highlighting for tables, keys, and values.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--csv</span>
+      <h3>CSV formatting</h3>
+      <p>Auto-detected CSV with aligned columns and syntax highlighting. Supports TSV variant.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--schema</span>
+      <h3>Schema inference</h3>
+      <p>Infer and display the schema of structured data (JSON, TOML, YAML, CSV) — field names, types, nullability, and sample values.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--chart</span>
+      <h3>ASCII charts</h3>
+      <p>Render tabular data as ASCII bar or line charts. Auto-detects chart type from data shape. Configure X/Y axes with <code>--chart-x</code> and <code>--chart-y</code>.</p>
+      <div class="kv"><span class="tag">--chart-type</span><span class="tag">auto-detect</span></div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Dev Tools -->
+<section id="dev" class="section">
+  <h2><span class="emoji">🛠️</span>Developer Tools</h2>
+  <p class="subtitle">Code review, debugging, reverse engineering, and source analysis tools.</p>
+
+  <div class="feature-grid">
+    <div class="feature-card">
+      <span class="flag">--elf</span>
+      <h3>ELF binary introspection</h3>
+      <p>Parse ELF binaries: headers, sections, segments, program headers, dynamic symbols. Architecture detection (x86/x86_64/ARM/AArch64/RISC-V).</p>
+      <div class="kv"><span class="tag purple">reverse engineering</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--disasm</span>
+      <h3>Disassembly (third call)</h3>
+      <p>Three consecutive runs on a binary trigger interactive x86/x86_64 disassembly via iced-x86. Shows instructions with addresses and bytes.</p>
+      <div class="kv"><span class="tag purple">x86/x64</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--source</span>
+      <h3>Source code</h3>
+      <p>Syntax-highlighted source code rendering. Choose from 200+ themes via <code>--theme</code> (syntect). List available themes with <code>--list-themes</code>.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--diff / -D</span>
+      <h3>Unified diff</h3>
+      <p>Auto-detects unified diff from stdin. Syntax-highlighted additions and deletions. Side-by-side mode with <code>--side-by-side</code>.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--search / -g</span>
+      <h3>Grep mode</h3>
+      <p>Regex search in files with color-highlighted matches. Context lines (<code>-C N</code>), match counts (<code>-c</code>), file-only mode (<code>-l</code>).</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--todo</span>
+      <h3>TODO scanner</h3>
+      <p>Scan codebases for TODO/FIXME/BUG/HACK/OPTIMIZE/TEMP/NOTE/REVIEW annotations. Color-coded by severity. Git blame integration with <code>--todo-blame</code>.</p>
+      <div class="kv"><span class="tag">--todo-kind</span><span class="tag">--todo-stats</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--git</span>
+      <h3>Git object viewer</h3>
+      <p>Display git objects: blobs, trees, commits, and tags. Pass a SHA/ref to inspect an object, or a path to show git log history.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--log</span>
+      <h3>Log highlighting</h3>
+      <p>Auto-detected log files with level-based coloring (ERROR=red, WARN=yellow, INFO=green, DEBUG=cyan). Timestamp detection.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Visual -->
+<section id="visual" class="section">
+  <h2><span class="emoji">🎨</span>Visual &amp; Creative</h2>
+  <p class="subtitle">Images, QR codes, audio metadata, and HTML output — ccat isn't just for text.</p>
+
+  <div class="feature-grid">
+    <div class="feature-card">
+      <span class="flag">-- (image file)</span>
+      <h3>Image rendering</h3>
+      <p>Auto-detects Kitty terminal protocol, Sixel, and falls back to half-block character rendering. Supports PNG, JPEG, GIF, WebP, BMP, TIFF.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--media</span>
+      <h3>Audio/Video metadata</h3>
+      <p>Extract and display audio/video metadata: codec, bitrate, sample rate, duration, tags. Supports MP3, FLAC, OGG, WAV, AAC, MP4, MKV, WebM.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--qr / -Q</span>
+      <h3>QR code generation</h3>
+      <p>Generate QR codes from text or piped input. Four ECC levels (L/M/Q/H). Color inversion with <code>--qr-invert</code>. Pure Rust (qrcode crate).</p>
+      <div class="kv"><span class="tag">--qr-ecc</span><span class="tag">--qr-invert</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--html</span>
+      <h3>HTML output</h3>
+      <p>Generate HTML output from any input file for browser viewing. Combined with <code>--serve PORT</code> to start an HTTP server.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--serve &lt;PORT&gt;</span>
+      <h3>HTTP server</h3>
+      <p>Start a lightweight HTTP server to serve files as rendered HTML. Great for sharing formatted documents over the network.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--chart</span>
+      <h3>ASCII charting</h3>
+      <p>Render numerical data as terminal charts. Auto-detect bar or line chart. Works with piped data or files.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Utility -->
+<section id="utility" class="section">
+  <h2><span class="emoji">🧰</span>Utility</h2>
+  <p class="subtitle">Everyday terminal productivity features.</p>
+
+  <div class="feature-grid">
+    <div class="feature-card">
+      <span class="flag">-n / --number</span>
+      <h3>Line numbering</h3>
+      <p>Number all output lines. Use <code>-b</code> to number only non-blank lines.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">-s / --squeeze-blank</span>
+      <h3>Squeeze blanks</h3>
+      <p>Squeeze consecutive blank lines into a single blank line.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">-e / --edit</span>
+      <h3>Sed substitution</h3>
+      <p>Apply sed-like substitution expressions (e.g. <code>s/foo/bar/</code>) to the output.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--tree / -r</span>
+      <h3>Directory tree</h3>
+      <p>Display directories as a tree with file types, sizes, and line counts. Dotfiles with <code>--all</code>, depth limit with <code>--depth N</code>.</p>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--archive</span>
+      <h3>Archive browser</h3>
+      <p>List and preview files inside archives: ZIP, TAR, GZip, BZip2, XZ, Zstd, Brotli, DEB, RPM. Preview individual files with <code>--archive archive.deb Makefile</code>.</p>
+      <div class="kv"><span class="tag">--archive-format</span></div>
+    </div>
+    <div class="feature-card">
+      <span class="flag">--watch / -w</span>
+      <h3>Auto-refresh</h3>
+      <p>Watch mode: re-run system diagnostics every N seconds (like <code>watch</code>). Supports all system modes. <code>--watch-once</code> for a clean one-shot refresh.</p>
+      <div class="kv"><span class="tag">Ctrl-C exit</span></div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- Real Examples -->
+<section id="examples" class="section">
+  <h2><span class="emoji">⚡</span>Real-World Examples</h2>
+  <p class="subtitle">From this very machine. ccat in action on a Proxmox VM running Arch Linux, AMD Ryzen 7 7840HS, 4 vCPU.</p>
+
+  <div class="example">
+    <h4><span class="arrow">⟫</span> CPU topology with AVX-512 flags</h4>
+    <div class="code-block">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> ccat --cpu</div>
+      <pre>⚡  AMD Ryzen 7 7840HS w/ Radeon 780M Graphics
+
+  CPU Topology — 4 CPUs, 1 package, 1 NUMA node
+
+  ┌─ Package P0 (4 cores)
+  │ L1       64K L1d            • 2-way • 64B line
+  │ L1       64K L1i            • 2-way • 64B line
+  │ L2      512K Unified        • 16-way • 64B line
+  │ L3    16384K Unified        • 16-way • 64B line (shared)
+
+  CPU Flags:
+    AVX/FMA │ avx avx2 avx512_bf16 avx512_bitalg ...
+    Vector Crypto │ gfni vaes vpclmulqdq
+    Crypto │ aes pclmulqdq sha_ni</pre>
+    </div>
+  </div>
+
+  <div class="example">
+    <h4><span class="arrow">⟫</span> OOM risk: 32 processes at critical level</h4>
+    <div class="code-block">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> ccat --oom</div>
+      <pre>═══ OOM Score Analysis ═══ (170 processes)
+  Critical: 32  High: 27  Medium: 0  Low: 2  Immune: 109
+  ⚠ cgroup OOM kills detected: user (2)
+
+PID  SCORE ADJ  OOM  RSS    COMMAND
+1156833  870   300  5    9.1M  chrome
+1026301  834   200  3  106.9M  hermes
+1026453  810   200  3   22.1M  node
+1026360  808   200  3   10.1M  headroom
+...</pre>
+    </div>
+  </div>
+
+  <div class="example">
+    <h4><span class="arrow">⟫</span> Memory deep-dive with ZRAM compression stats</h4>
+    <div class="code-block">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> ccat --meminfo</div>
+      <pre>MEMORY
+  Total: 3.8 GiB  Available: 1.7 GiB  Used: 56.3%
+  ├─ AnonPages: 1.0 GiB (27.6%)
+  ├─ Cached: 1.3 GiB (33.1%)
+  ├─ Slab: 409 MiB (reclaimable: 275 MiB)
+  ├─ Swap: 60.6% used (1.2 GiB / 1.9 GiB)
+  ├─ ZRAM: 2.65x compression (lzo-rle/lzo/lz4/zstd/842)
+  ├─ Huge Pages: 18 MiB AnonHuge, 5.9 GiB DirectMap
+  └─ OOM risk: 136.9% committed</pre>
+    </div>
+  </div>
+
+  <div class="example">
+    <h4><span class="arrow">⟫</span> Scheduler: 16 FIFO RT tasks, 0 DEADLINE</h4>
+    <div class="code-block">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> ccat --sched</div>
+      <pre>── Scheduling Policy Distribution ──
+  OTHER (154):  154 (90.6%)
+  FIFO (16):     16 ( 9.4%)
+  RR (0):         0 ( 0.0%)
+  BATCH (0):      0 ( 0.0%)
+  IDLE (0):       0 ( 0.0%)
+  DEADLINE (0):   0 ( 0.0%)
+
+── System Load ──
+  Load average (1/5/15m)   0.31 0.18 0.14
+  Running / Total          1 / 170
+  Context switches total   791,072,627
+  Process creation rate    1.3/s
+
+── Scheduler Tunables ──
+  CFS bandwidth slice      3000 µs
+  RR timeslice             100 ms
+  RT period                1 s (95% runtime)</pre>
+    </div>
+  </div>
+
+  <div class="example">
+    <h4><span class="arrow">⟫</span> IRQ analysis: MSI-X virtio devices dominate</h4>
+    <div class="code-block">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span> ccat --interrupts</div>
+      <pre>═══ Interrupt Analysis ═══  CPUs: 4
+
+── Device IRQs (top by volume) ──
+IRQ  TOTAL      DISTRIBUTION           DEVICE
+ 37  11,821,524  [·,11821524,·,·]      virtio4-input.0
+ 30   9,382,346  [9382346,·,·,·]       virtio3-req.3
+ 27   9,370,775  [·,9370775,·,·]       virtio3-req.0
+ 29   9,352,309  [·,·,9352300,·]       virtio3-req.2
+ 28   9,344,568  [·,·,·,9344568]       virtio3-req.1
+...</pre>
+    </div>
+  </div>
+
+</section>
+
+<hr class="divider">
+
+<!-- Feature Matrix -->
+<section class="section">
+  <h2><span class="emoji">📊</span>Feature Matrix</h2>
+  <p class="subtitle">What ccat replaces. One binary, zero dependencies.</p>
+
+  <div style="overflow-x:auto">
+  <table style="width:100%; border-collapse: collapse; font-size: 14px;">
+    <thead>
+      <tr style="border-bottom: 1px solid var(--border);">
+        <th style="text-align:left; padding: 10px 12px; color: var(--fg2);">ccat flag</th>
+        <th style="text-align:left; padding: 10px 12px; color: var(--fg2);">Replaces</th>
+        <th style="text-align:left; padding: 10px 12px; color: var(--fg2);">What it does</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">(auto)</code></td><td style="padding:8px 12px; color:var(--green)">cat</td><td style="padding:8px 12px; color:var(--fg2)">File viewing with auto-detection</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--health</code></td><td style="padding:8px 12px; color:var(--green)">htop + free + iostat + ss</td><td style="padding:8px 12px; color:var(--fg2)">Unified system health</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--ps</code></td><td style="padding:8px 12px; color:var(--green)">ps aux</td><td style="padding:8px 12px; color:var(--fg2)">Color-coded process list</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--netstat</code></td><td style="padding:8px 12px; color:var(--green)">ss -tulpn</td><td style="padding:8px 12px; color:var(--fg2)">Network connections</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--meminfo</code></td><td style="padding:8px 12px; color:var(--green)">free -m + /proc/meminfo</td><td style="padding:8px 12px; color:var(--fg2)">Full memory analysis</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--cpu</code></td><td style="padding:8px 12px; color:var(--green)">lscpu + cpuid</td><td style="padding:8px 12px; color:var(--fg2)">CPU topology + flags</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--disk</code></td><td style="padding:8px 12px; color:var(--green)">df + mount + iostat</td><td style="padding:8px 12px; color:var(--fg2)">Disk & filesystem info</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--swap</code></td><td style="padding:8px 12px; color:var(--green)">swapon + /proc/swaps</td><td style="padding:8px 12px; color:var(--fg2)">Swap & ZRAM analysis</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--oom</code></td><td style="padding:8px 12px; color:var(--green)">chomp OOM + /proc/*/oom_score</td><td style="padding:8px 12px; color:var(--fg2)">OOM risk analysis</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--fd</code></td><td style="padding:8px 12px; color:var(--green)">lsof + ls -l /proc/*/fd</td><td style="padding:8px 12px; color:var(--fg2)">File descriptor viewer</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--cgroup</code></td><td style="padding:8px 12px; color:var(--green)">systemd-cgls + cat /proc/cgroups</td><td style="padding:8px 12px; color:var(--fg2)">Cgroup v2 hierarchy</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--sched</code></td><td style="padding:8px 12px; color:var(--green)">chrt + /proc/sched_debug</td><td style="padding:8px 12px; color:var(--fg2)">Scheduler analysis</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--interrupts</code></td><td style="padding:8px 12px; color:var(--green)">cat /proc/interrupts</td><td style="padding:8px 12px; color:var(--fg2)">IRQ/SoftIRQ analysis</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--vmmap</code></td><td style="padding:8px 12px; color:var(--green)">cat /proc/*/maps + smaps</td><td style="padding:8px 12px; color:var(--fg2)">Virtual memory map</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--search</code></td><td style="padding:8px 12px; color:var(--green)">grep</td><td style="padding:8px 12px; color:var(--fg2)">Regex search in files</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--diff</code></td><td style="padding:8px 12px; color:var(--green)">diff</td><td style="padding:8px 12px; color:var(--fg2)">File comparison</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--tree</code></td><td style="padding:8px 12px; color:var(--green)">tree</td><td style="padding:8px 12px; color:var(--fg2)">Directory tree</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--hex</code></td><td style="padding:8px 12px; color:var(--green)">xxd / od</td><td style="padding:8px 12px; color:var(--fg2)">Hex dump</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--elf</code></td><td style="padding:8px 12px; color:var(--green)">readelf</td><td style="padding:8px 12px; color:var(--fg2)">ELF binary analysis</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--follow</code></td><td style="padding:8px 12px; color:var(--green)">tail -f</td><td style="padding:8px 12px; color:var(--fg2)">Live file following</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--todo</code></td><td style="padding:8px 12px; color:var(--green)">ripgrep TODO</td><td style="padding:8px 12px; color:var(--fg2)">Code annotation scanner</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--qr</code></td><td style="padding:8px 12px; color:var(--green)">qrencode</td><td style="padding:8px 12px; color:var(--fg2)">QR code generation</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--chart</code></td><td style="padding:8px 12px; color:var(--green)">gnuplot</td><td style="padding:8px 12px; color:var(--fg2)">ASCII charting</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--schema</code></td><td style="padding:8px 12px; color:var(--green)">—</td><td style="padding:8px 12px; color:var(--fg2)">Schema inference</td></tr>
+      <tr style="border-bottom: 1px solid var(--border);"><td style="padding:8px 12px"><code style="color:var(--accent)">--git</code></td><td style="padding:8px 12px; color:var(--green)">git show / git log</td><td style="padding:8px 12px; color:var(--fg2)">Git object viewer</td></tr>
+      <tr style="padding:8px 12px"><td style="padding:8px 12px"><code style="color:var(--accent)">--serve</code></td><td style="padding:8px 12px; color:var(--green)">python -m http.server</td><td style="padding:8px 12px; color:var(--fg2)">HTTP file server</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<hr class="divider">
+
+<section class="section" style="text-align:center;">
+  <h2><span class="emoji">🚀</span>Get Started</h2>
+  <p class="subtitle">One binary, ~6MB, zero runtime dependencies. Replace a dozen tools today.</p>
+  <div class="install-box" style="display:inline-block; text-align:left; min-width:300px;">
+    <h3>⟫ Quick start</h3>
+    <code>ccat README.md           # render markdown
+ccat --health            # system health check
+ccat --ps --ps-sort -mem # processes by memory
+ccat --oom               # OOM risk
+ccat -D a.txt b.txt      # diff two files
+ccat --qr "hello"        # QR code
+ccat --watch 2 --ps      # watch processes</code>
+    <p class="note" style="margin-top:16px;">
+      <a href="https://github.com/zhiyuHD/ccat" style="color:var(--accent);">GitHub →</a> &nbsp;·&nbsp;
+      <a href="https://aur.archlinux.org/packages/ccat-rs" style="color:var(--accent);">AUR →</a>
+    </p>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  <p>ccat · Built with 🦀 in Rust · <a href="https://github.com/zhiyuHD/ccat">GitHub</a></p>
+  <p style="margin-top:4px; font-size:12px;">MIT License · Zhiyu Wang</p>
+</footer>
+
+</body>
+</html>

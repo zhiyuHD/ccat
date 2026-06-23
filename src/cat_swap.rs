@@ -725,7 +725,7 @@ pub fn cat_swap() {
     }
 
     if !procs.is_empty() {
-        let total_swap_kb: u64 = procs.iter().map(|p| p.swap_kb).sum();
+        let _total_swap_kb: u64 = procs.iter().map(|p| p.swap_kb).sum();
         let top = &procs[0];
         println!("  {} {} consumes {} — the biggest swap user ({}).",
             style::cyan("■"),

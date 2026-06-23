@@ -538,7 +538,7 @@ pub fn cat_netstat(opts: &NetstatOptions) {
     let mut max_proto = 5;
     let mut max_local = 23;
     let mut max_remote = 23;
-    let mut max_state = 11;
+    let max_state = 11;
     let mut max_proc = 10;
 
     for conn in &connections {

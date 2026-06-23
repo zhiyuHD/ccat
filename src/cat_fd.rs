@@ -12,9 +12,8 @@
 //! - Summary statistics by type
 //! - Optional: show all processes' fds in one view
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 // ── Colour helpers ──
@@ -409,7 +408,7 @@ fn is_potential_leak(fd_num: u32, fd_type: &FdType, target: &str) -> bool {
 fn display_process_fds(
     pid: u32,
     fds: &[FdInfo],
-    socket_map: &HashMap<String, SocketInfo>,
+    _socket_map: &HashMap<String, SocketInfo>,
 ) {
     let name = get_process_name(pid);
     let cmdline = get_cmdline(pid);

@@ -49,6 +49,24 @@ pub(crate) fn read_theme_override() -> Option<String> {
 /// 1. `--theme` CLI flag (stored in /tmp/ccat-state/theme)
 /// 2. Auto-detected dark/light theme from color_scheme module
 pub fn cat_source(data: &[u8], filename_hint: &str) {
+    cat_source_inner(data, filename_hint, None);
+}
+
+/// Same as cat_source but also shows git blame annotations in the left margin.
+pub fn cat_source_with_blame(
+    data: &[u8],
+    filename_hint: &str,
+    blame_entries: &[crate::cat_blame::BlameEntry],
+) {
+    cat_source_inner(data, filename_hint, Some(blame_entries));
+}
+
+/// Internal implementation shared by cat_source and cat_source_with_blame.
+fn cat_source_inner(
+    data: &[u8],
+    filename_hint: &str,
+    blame_entries: Option<&[crate::cat_blame::BlameEntry]>,
+) {
     let ss = SyntaxSet::load_defaults_newlines();
     // Choose syntect theme: check for CLI/config override first
     let theme_name = read_theme_override()
@@ -73,8 +91,29 @@ pub fn cat_source(data: &[u8], filename_hint: &str) {
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
 
-    for line in LinesWithEndings::from(&s) {
+    // Pre-compute blame margin width if blame entries are available
+    let (blame_map, author_width) = if let Some(entries) = blame_entries {
+        let aw = crate::cat_blame::max_author_width(entries);
+        // Build a map: line_number -> &BlameEntry
+        let map: std::collections::HashMap<usize, &crate::cat_blame::BlameEntry> =
+            entries.iter().map(|e| (e.line, e)).collect();
+        (Some(map), aw)
+    } else {
+        (None, 0usize)
+    };
+
+    for (line_idx, line) in LinesWithEndings::from(&s).enumerate() {
+        let line_number = line_idx + 1; // 1-based
         let line_text = line.trim_end_matches('\n').trim_end_matches('\r');
+
+        // Render blame margin first (if available)
+        if let Some(ref map) = blame_map {
+            let entry = map.get(&line_number).copied();
+            let margin = crate::cat_blame::format_blame_margin(entry, author_width);
+            let _ = write!(handle, "{}", margin);
+        }
+
+        // Render the highlighted code
         if line_text.is_empty() {
             let _ = writeln!(handle);
             continue;
@@ -124,7 +163,6 @@ mod tests {
     fn test_cat_source_rust_syntax() {
         let code = b"fn main() {\n    println!(\"hello\");\n}\n";
         // Should not panic, should produce some output
-        // We can't easily capture stdout, but we can test it doesn't crash
         cat_source(code, "test.rs");
     }
 

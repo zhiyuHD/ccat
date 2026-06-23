@@ -115,7 +115,7 @@ fn read_cpu_info() -> (String, Vec<String>, Vec<CoreTopology>) {
     // flags
     let mut flags: Vec<String> = Vec::new();
     for line in cpuinfo.lines() {
-        if let Some(f) = line.strip_prefix("flags") {
+        if let Some(_f) = line.strip_prefix("flags") {
             let feat = line.split(':').last().map(|s| s.trim().to_string()).unwrap_or_default();
             flags = feat.split_whitespace().map(|s| s.to_string()).collect();
             break;
@@ -124,7 +124,7 @@ fn read_cpu_info() -> (String, Vec<String>, Vec<CoreTopology>) {
     // Also check "Features" line (some kernels)
     if flags.is_empty() {
         for line in cpuinfo.lines() {
-            if let Some(f) = line.strip_prefix("Features") {
+            if let Some(_f) = line.strip_prefix("Features") {
                 let feat = line.split(':').last().map(|s| s.trim().to_string()).unwrap_or_default();
                 flags = feat.split_whitespace().map(|s| s.to_string()).collect();
                 break;
@@ -240,7 +240,7 @@ fn flag_group(flag: &str) -> &'static str {
         | "clwb" | "xsave" | "xsaveopt" | "xsavec" | "xgetbv1" | "xsaves"
         | "clzero" | "wbnoinvd" | "rdrand" | "rdseed" | "fsgsbase" => "Memory/Misc",
         // Monitoring
-        "perfctr_core" | "perfmon_v2" | "overflow_recov" | "arat"
+        "perfctr_core" | "perfmon_v2" | "arat"
         | "tsc" | "tsc_deadline_timer" | "tsc_adjust" | "tsc_known_freq" => "Timing/Monitoring",
         // CPU features
         "cx8" | "cx16" | "cmov" | "x2apic" | "apic"

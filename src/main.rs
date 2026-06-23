@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,6 +59,14 @@ mod cat_watch;
 mod cat_irq;
 
 mod cat_sched;
+
+mod cat_todo;
+
+mod cat_churn;
+
+mod cat_blame;
+
+mod cat_bundle;
 
 const STATE_DIR: &str = "/tmp/ccat-state";
 
@@ -344,6 +352,104 @@ struct Cli {
     /// one-off refresh (--ps, --netstat, --health, etc.).
     #[arg(long = "watch-once")]
     watch_once: bool,
+
+    /// Scan codebase for TODO/FIXME/HACK/XXX/BUG/OPTIMIZE and other annotations.
+    /// Recursively scans files in the given directory (default: current dir).
+    /// Shows annotations grouped by directory with color-coded severity.
+    #[arg(long = "todo", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd", "oom", "interrupts", "sched", "qr", "archive"])]
+    todo: bool,
+
+    /// Include git blame info (author + date) for each annotation (with --todo).
+    #[arg(long = "todo-blame", requires = "todo")]
+    todo_blame: bool,
+
+    /// Show summary statistics only (with --todo).
+    #[arg(long = "todo-stats", requires = "todo")]
+    todo_stats: bool,
+
+    /// Include hidden files and directories (with --todo).
+    #[arg(long = "todo-hidden", requires = "todo")]
+    todo_hidden: bool,
+
+    /// Custom annotation patterns to search for (comma-separated, with --todo).
+    #[arg(long = "todo-patterns", value_name = "PATTERNS", requires = "todo")]
+    todo_custom_patterns: Option<String>,
+
+    /// Only show annotations matching these kinds (comma-separated, with --todo).
+    /// Examples: fixme,bug,hack or todo,optimize
+    #[arg(long = "todo-kind", value_name = "KINDS", requires = "todo")]
+    todo_kind: Option<String>,
+
+    /// Maximum recursion depth for --todo scan.
+    #[arg(long = "todo-depth", value_name = "N", requires = "todo")]
+    todo_depth: Option<usize>,
+
+    /// Show git churn analysis: files sorted by change frequency.
+    /// Identifies the most volatile, high-risk areas of a codebase.
+    #[arg(long = "churn", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd", "oom", "interrupts", "sched", "todo", "qr", "archive"])]
+    churn: bool,
+
+    /// Number of top files to show in churn analysis (with --churn, default: 10).
+    #[arg(long = "churn-top", value_name = "N", requires = "churn")]
+    churn_top: Option<usize>,
+
+    /// Show all files in churn analysis, not just top N.
+    #[arg(long = "churn-all", requires = "churn")]
+    churn_all: bool,
+
+    /// Git since filter for churn analysis (e.g. "2025-01-01", "1 year ago").
+    #[arg(long = "churn-since", value_name = "DATE", requires = "churn")]
+    churn_since: Option<String>,
+
+    /// Git until filter for churn analysis.
+    #[arg(long = "churn-until", value_name = "DATE", requires = "churn")]
+    churn_until: Option<String>,
+
+    /// Only show files matching this path prefix in churn analysis.
+    #[arg(long = "churn-path", value_name = "PREFIX", requires = "churn")]
+    churn_path: Option<String>,
+
+    /// Suppress the header in churn output (for scripting).
+    #[arg(long = "no-header", requires = "churn")]
+    no_header: bool,
+
+    /// Show git blame annotations when viewing source code files.
+    /// Displays commit hash, author, and age-color-coded margin for each line.
+    /// Only works in git repositories for tracked files.
+    #[arg(short = 'G', long = "blame", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd", "oom", "interrupts", "sched", "todo", "churn", "qr", "archive"])]
+    blame: bool,
+
+    /// Bundle mode: combine files into a structured context for LLM prompts.
+    /// Outputs files with markdown code fences, ideal for feeding into an AI.
+    /// Supports recursive directory scanning, auto-skips binary/images/archives.
+    /// Can set file size, line count, and total output limits.
+    #[arg(long = "bundle", conflicts_with_all = &["diff", "tree", "elf", "schema", "html", "follow", "serve", "search", "chart", "vmmap", "meminfo", "ps", "inspect", "netstat", "cpu", "disk", "cgroup", "health", "swap", "git", "fd", "oom", "interrupts", "sched", "todo", "churn", "qr", "archive", "blame"])]
+    bundle: bool,
+
+    /// Output format for --bundle: "markdown" (default), "plain", or "compact".
+    #[arg(long = "bundle-format", value_name = "FORMAT", default_value = "markdown", requires = "bundle")]
+    bundle_format: String,
+
+    /// Max lines per file in --bundle mode (truncates large files). 0 = unlimited.
+    #[arg(long = "bundle-max-lines", value_name = "N", default_value_t = 0, requires = "bundle")]
+    bundle_max_lines: usize,
+
+    /// Max total lines across all files in --bundle mode. 0 = unlimited.
+    #[arg(long = "bundle-max-total", value_name = "N", default_value_t = 0, requires = "bundle")]
+    bundle_max_total: usize,
+
+    /// Glob/pattern to exclude files from --bundle (e.g. "*.log", "test_*").
+    /// Supports: "*.ext" (suffix), "prefix*" (prefix), or substring match.
+    #[arg(long = "bundle-exclude", value_name = "PATTERN", requires = "bundle")]
+    bundle_exclude: Option<String>,
+
+    /// Prepend a directory tree listing to the bundle output.
+    #[arg(long = "bundle-tree", requires = "bundle")]
+    bundle_tree: bool,
+
+    /// Show file size and line count metadata for each bundled file.
+    #[arg(long = "bundle-stats", requires = "bundle")]
+    bundle_stats: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -817,7 +923,7 @@ fn cat_gz(data: &[u8]) {
     }
 }
 
-fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, has_opts: bool, number: bool, number_nonblank: bool, squeeze: bool, edit: Option<&str>) -> io::Result<()> {
+fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, has_opts: bool, number: bool, number_nonblank: bool, squeeze: bool, edit: Option<&str>, blame: bool) -> io::Result<()> {
     let path_obj = Path::new(path);
 
     // If it's a directory, show file-like summary for each entry
@@ -893,7 +999,20 @@ fn cat_file(path: &str, force_ascii: bool, force_binary: bool, show_type: bool, 
         FileKind::Csv => cat_csv::cat_csv(&data),
         FileKind::Log => cat_log::cat_log(&data),
         FileKind::UnifiedDiff => cat_diff::cat_diff_stdin(&data),
-        FileKind::SourceCode => cat_source::cat_source(&data, path),
+        FileKind::SourceCode => {
+            if blame {
+                match cat_blame::run_git_blame(path) {
+                    Ok(entries) => cat_source::cat_source_with_blame(&data, path, &entries),
+                    Err(ref e) => {
+                        // If not in a git repo, show without blame but note it
+                        eprintln!("\x1b[2mccat: --blame: {e}\x1b[0m");
+                        cat_source::cat_source(&data, path);
+                    }
+                }
+            } else {
+                cat_source::cat_source(&data, path);
+            }
+        }
         FileKind::PlainText => {
             if is_binary(&data) {
                 if !show_type {
@@ -1112,7 +1231,7 @@ fn main() {
     // ── System diagnostic modes (support --watch / --watch-once) ──
     if cli.vmmap.is_some() || cli.meminfo || cli.ps || cli.cpu || cli.disk
         || cli.cgroup || cli.health || cli.swap || cli.git || cli.fd.is_some()
-        || cli.netstat || cli.oom || cli.interrupts || cli.sched
+        || cli.netstat || cli.oom || cli.interrupts || cli.sched || cli.todo || cli.churn
     {
         if let Some(interval) = cli.watch {
             cat_watch::run_watch(interval, || { run_system_commands(&cli); });
@@ -1296,6 +1415,27 @@ fn main() {
         return;
     }
 
+    // Bundle mode: bundle files for LLM context
+    if cli.bundle {
+        if cli.files.is_empty() {
+            eprintln!("ccat: --bundle requires file or directory paths");
+            return;
+        }
+        let opts = cat_bundle::BundleOptions {
+            paths: &cli.files,
+            format: cat_bundle::BundleFormat::from_str(&cli.bundle_format),
+            max_lines: cli.bundle_max_lines,
+            max_total: cli.bundle_max_total,
+            exclude: cli.bundle_exclude.as_deref(),
+            show_tree: cli.bundle_tree,
+            show_stats: cli.bundle_stats,
+        };
+        if let Err(e) = cat_bundle::cat_bundle(&opts) {
+            eprintln!("ccat: --bundle: {e}");
+        }
+        return;
+    }
+
     for (i, file) in cli.files.iter().enumerate() {
         if i > 0 {
             println!();
@@ -1378,7 +1518,7 @@ fn main() {
             let kind = detect_kind(&data, path_obj);
             let html = cat_html::cat_file_html(&data, kind, path_obj);
             print!("{html}");
-        } else if let Err(e) = cat_file(file, cli.ascii, cli.binary, cli.show_type, has_opts, number, number_nonblank, squeeze, edit) {
+        } else if let Err(e) = cat_file(file, cli.ascii, cli.binary, cli.show_type, has_opts, number, number_nonblank, squeeze, edit, cli.blame) {
             if e.kind() != io::ErrorKind::Other {
                 // We already printed the error in cat_file
             }
@@ -1498,6 +1638,55 @@ fn run_system_commands(cli: &Cli) -> bool {
     // Scheduler analysis mode: show scheduler state
     if cli.sched {
         cat_sched::cat_sched();
+        return true;
+    }
+
+    // Churn analysis mode
+    if cli.churn {
+        let top_n = cli.churn_top.unwrap_or(10);
+        let opts = cat_churn::ChurnOptions {
+            paths: if cli.files.is_empty() {
+                vec![".".to_string()]
+            } else {
+                cli.files.clone()
+            },
+            top_n,
+            since: cli.churn_since.clone(),
+            until: cli.churn_until.clone(),
+            show_all: cli.churn_all,
+            no_header: false,
+            path_filter: cli.churn_path.clone(),
+        };
+        cat_churn::cat_churn(&opts);
+        return true;
+    }
+
+    // Todo mode: scan codebase for annotations
+    if cli.todo {
+        let paths: Vec<std::path::PathBuf> = if cli.files.is_empty() {
+            vec![std::path::PathBuf::from(".")]
+        } else {
+            cli.files.iter().map(std::path::PathBuf::from).collect()
+        };
+
+        let custom_patterns: Vec<String> = cli.todo_custom_patterns.as_ref()
+            .map(|s| s.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
+            .unwrap_or_default();
+
+        let filter_kinds: Vec<String> = cli.todo_kind.as_ref()
+            .map(|s| s.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect())
+            .unwrap_or_default();
+
+        let opts = cat_todo::TodoOptions {
+            paths,
+            include_hidden: cli.todo_hidden,
+            custom_patterns,
+            show_blame: cli.todo_blame,
+            show_stats_only: cli.todo_stats,
+            max_depth: cli.todo_depth,
+            filter_kinds,
+        };
+        cat_todo::cat_todo(&opts);
         return true;
     }
 

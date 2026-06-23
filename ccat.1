@@ -1,12 +1,20 @@
-.\" Man page for ccat-rs
-.TH CCAT 1 "2026-05-17" "0.1.0" "User Commands"
+.\\\" Man page for ccat-rs
+.TH CCAT 1 "2026-06-21" "0.3.4" "User Commands"
 .SH NAME
-ccat \- Enhanced cat: auto-detect and display markdown, docx, images, gz, diff, and disassemble ELF
+ccat \\- The Terminal Swiss Army Knife \\- enhanced cat with 40+ features: file viewer, Linux system diagnostics, dev tools, and more
 .SH SYNOPSIS
 .B ccat
-[\fI\,OPTIONS\/\fR] [\fI\,FILES\/\fR]...
+[\\fI\\,OPTIONS\\/\\fR] [\\fI\\,FILES\\/\\fR]...
 .SH DESCRIPTION
-ccat is an enhanced cat tool that automatically detects file types and renders them appropriately in the terminal. It supports Markdown rendering, Word document text extraction, image display (Kitty/Sixel/half-block), gzip transparent decompression, PDF text extraction, archive listing, audio/video metadata, JSON/YAML formatting, log highlighting, ELF binary disassembly, and diff viewing.
+ccat is an enhanced cat tool that automatically detects file types and renders them appropriately in the terminal. It also includes a comprehensive Linux system diagnostics suite, developer tools, charting engine, QR code generator, and more \\- all in a single Rust binary with zero runtime dependencies.
+
+File viewing: Markdown rendering, Word document text extraction, image display (Kitty/Sixel/half-block), gzip transparent decompression, PDF text extraction, archive listing (zip/tar/deb/rpm), audio/video metadata, JSON/YAML/TOML/CSV formatting, log highlighting, ELF binary introspection, and diff viewing.
+
+System diagnostics: unified health assessment with scoring (\\fB--health\\fR), memory analysis with bar charts (\\fB--meminfo\\fR), process list (\\fB--ps\\fR), CPU topology with AVX-512 flags (\\fB--cpu\\fR), disk/filesystem stats (\\fB--disk\\fR), network connections (\\fB--netstat\\fR), swap/ZRAM analysis (\\fB--swap\\fR), cgroup v2 hierarchy (\\fB--cgroup\\fR), OOM score analyzer (\\fB--oom\\fR), file descriptors (\\fB--fd\\fR), virtual memory maps (\\fB--vmmap\\fR), IRQ/SoftIRQ analysis (\\fB--interrupts\\fR), and scheduler analysis (\\fB--sched\\fR).
+
+Developer tools: codebase TODO/FIXME scanner (\\fB--todo\\fR), regex search (\\fB--search\\fR), git object viewer (\\fB--git\\fR), file inspection with hashes (\\fB--inspect\\fR), schema inference (\\fB--schema\\fR).
+
+Creative: QR code generation (\\fB--qr\\fR), ASCII charting (\\fB--chart\\fR), HTTP server (\\fB--serve\\fR), HTML output (\\fB--html\\fR).
 .SH OPTIONS
 .TP
 \fB\-D\fR, \fB\-\-diff\fR \fI<file1>\fR \fI<file2>\fR

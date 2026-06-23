@@ -78,7 +78,7 @@ impl VmRegion {
 
     fn perms_colored(&self) -> String {
         let mut out = String::with_capacity(4);
-        for (i, ch) in self.perms.chars().enumerate() {
+        for (_i, ch) in self.perms.chars().enumerate() {
             let colored = match ch {
                 'r' => style::green("r"),
                 'w' => style::red("w"),
@@ -502,7 +502,7 @@ pub fn cat_vmmap(pid: u32, detailed: bool) {
     // Show first max_display regions
     let to_show = if truncated { &compact_regions[..max_display] } else { &compact_regions[..] };
 
-    for (addr, size_kb, rss, dirty, swap, pss, pathname) in to_show {
+    for (addr, size_kb, rss, dirty, swap, _pss, pathname) in to_show {
         let rtype = if pathname == "[heap]" { "heap" }
             else if pathname == "[stack]" || pathname.starts_with("[stack:") { "stack" }
             else if pathname.starts_with("[") && pathname.ends_with("]") { "anon-special" }
@@ -519,7 +519,7 @@ pub fn cat_vmmap(pid: u32, detailed: bool) {
         };
 
         // Determine perms string color
-        let perms = if pathname == "[vdso]" || pathname == "[vvar]" {
+        let _perms = if pathname == "[vdso]" || pathname == "[vvar]" {
             style::dim("----")
         } else if rtype == "file" && *size_kb < 4 {
             // Tiny file mappings = less interesting
@@ -645,15 +645,15 @@ pub fn cat_meminfo() {
     let direct_map_1g = mem.get("DirectMap1G").copied().unwrap_or(0);
     let huge_anon = mem.get("AnonHugePages").copied().unwrap_or(0);
 
-    let used = total.saturating_sub(free + buffers + cached);
+    let _used = total.saturating_sub(free + buffers + cached);
 
     // ── Memory overview ──
     let _ = writeln!(out, " │ {} {:>25} {}",
         style::bold("MEMORY"), "", style::dim("│"));
 
     let avail_pct = if total > 0 { available as f64 / total as f64 * 100.0 } else { 0.0 };
-    let used_gb = (total - available) as f64 / 1_048_576.0;
-    let total_gb = total as f64 / 1_048_576.0;
+    let _used_gb = (total - available) as f64 / 1_048_576.0;
+    let _total_gb = total as f64 / 1_048_576.0;
 
     let _ = writeln!(out, " │ {:>6} {:>10}  {:>10}  {}",
         style::bold("Total:"), kb(total),

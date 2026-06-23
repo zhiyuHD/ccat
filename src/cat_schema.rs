@@ -566,7 +566,7 @@ fn infer_csv_schema(s: &str) -> SchemaNode {
         }
     }
 
-    let total_rows = data_lines.len();
+    let _total_rows = data_lines.len();
     let mut children = Vec::new();
 
     for (i, header) in headers.iter().enumerate() {
@@ -761,7 +761,7 @@ fn print_node(
         }
     }
 
-    if let SchemaNode::Array { element, count, min_len, max_len, .. } = node {
+    if let SchemaNode::Array { element, count: _, min_len: _, max_len: _, .. } = node {
         if let SchemaNode::Object { children, .. } = element.as_ref() {
             for (i, (child_name, child)) in children.iter().enumerate() {
                 let child_is_last = i == children.len() - 1;
@@ -828,7 +828,7 @@ fn node_label(node: &SchemaNode) -> String {
         }
         SchemaNode::Integer {
             nulls,
-            total,
+            total: _,
             min,
             max,
             has_default: _,

@@ -107,7 +107,7 @@ fn handle_connection(mut stream: TcpStream, state: &ServeState) -> std::io::Resu
 
     let request_line = request_line.trim().to_string();
 
-    // Read and discard headers
+    // Read and parse headers (need to keep for SSE origin checks and query params)
     let mut header_line = String::new();
     loop {
         header_line.clear();
@@ -116,41 +116,62 @@ fn handle_connection(mut stream: TcpStream, state: &ServeState) -> std::io::Resu
         }
     }
 
-    // Parse request path
-    let request_path = request_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("/");
+    // Parse request path and method
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    let _method = parts.first().copied().unwrap_or("GET");
+    let request_path = parts.get(1).copied().unwrap_or("/");
 
-    let response = match &state.roots[..] {
-        // Single directory root — map URL paths directly to filesystem
-        [RootEntry::Dir(root)] => serve_from_directory(request_path, root),
-        // Multiple roots — backward compat with index-based + filename routing
-        roots => serve_from_roots(request_path, roots),
-    };
+    // SSE watching endpoint
+    if request_path.starts_with("/__watch__") {
+        // Extract the ?path= query parameter
+        let watch_target = request_path
+            .split('?')
+            .nth(1)
+            .and_then(|q| {
+                q.split('&').find_map(|pair| {
+                    let mut kv = pair.splitn(2, '=');
+                    let key = kv.next()?;
+                    let val = kv.next()?;
+                    if key == "path" { Some(val) } else { None }
+                })
+            })
+            .unwrap_or("");
 
-    stream.write_all(response.as_bytes())?;
-    stream.flush()?;
+        let path = urlencoding_decode(watch_target);
+        handle_sse_watch(stream, &path, state)
+    } else {
+        let response = match &state.roots[..] {
+            // Single directory root — map URL paths directly to filesystem
+            [RootEntry::Dir(root)] => serve_from_directory(request_path, root),
+            // Multiple roots — backward compat with index-based + filename routing
+            roots => serve_from_roots(request_path, roots),
+        };
 
-    if let Ok(addr) = &peer {
-        let now = format_timestamp();
-        eprintln!(
-            "\x1b[2m[{}] {} {} {}\x1b[0m",
-            now,
-            addr,
-            request_line,
-            response.lines().next().unwrap_or("HTTP/1.1 ???")
-        );
+        stream.write_all(response.as_bytes())?;
+        stream.flush()?;
+
+        if let Ok(addr) = &peer {
+            let now = format_timestamp();
+            eprintln!(
+                "\x1b[2m[{}] {} {} {}\x1b[0m",
+                now,
+                addr,
+                request_line,
+                response.lines().next().unwrap_or("HTTP/1.1 ???")
+            );
+        }
+
+        Ok(())
     }
-
-    Ok(())
 }
 
 // ── Directory mode ──
 
 fn serve_from_directory(request_path: &str, root: &Path) -> String {
+    // Strip query parameters (e.g., ?thumb=1)
+    let clean_request = request_path.split('?').next().unwrap_or(request_path);
     // Sanitize and resolve path
-    let clean_path = sanitize_path(request_path);
+    let clean_path = sanitize_path(clean_request);
     let target = root.join(&clean_path);
 
     // Security: ensure we haven't escaped the root
@@ -236,10 +257,12 @@ fn serve_directory_listing(dir: &Path, root: &Path) -> String {
 
     // Generate table rows
     let mut rows = String::new();
+    // Grid view items
+    let mut grid_items = String::new();
+    let mut has_images = false;
 
     // ".." link if not at root
     if dir != root {
-        // Compute parent URL path
         let parent_url = parent_url_path(dir, root);
         rows.push_str(&format!(
             r#"<tr class="dir"><td class="icon">📂</td><td><a href="{}">..</a></td><td class="dim">—</td><td class="dim">parent directory</td><td></td></tr>"#,
@@ -265,16 +288,45 @@ fn serve_directory_listing(dir: &Path, root: &Path) -> String {
             format_mtime(entry.mtime)
         };
 
+        // Image thumbnail for non-directory image files
+        let icon_cell = if !entry.is_dir {
+            let _path_obj = Path::new(&entry.rel_path);
+            let full_path = root.join(&entry.rel_path);
+            if is_image_file(&full_path) {
+                has_images = true;
+                // Thumbnail using the query param ?thumb=1
+                let thumb = file_thumbnail_html(&full_path, &entry.rel_path);
+                format!(r#"<td class="icon">{}{}</td>"#, thumb, icon)
+            } else {
+                format!(r#"<td class="icon">{}</td>"#, icon)
+            }
+        } else {
+            format!(r#"<td class="icon">{}</td>"#, icon)
+        };
+
         rows.push_str(&format!(
-            r#"<tr class="{}"><td class="icon">{}</td><td><a href="/{}">{}</a></td><td>{}</td><td class="dim">{}</td><td class="date">{}</td></tr>"#,
+            r#"<tr class="{}"><td class="icon">{}</td><td><a href="/{}">{}</a></td><td data-sort="{}">{}</td><td class="dim">{}</td><td class="date" data-sort="{}">{}</td></tr>"#,
             if entry.is_dir { "dir" } else { "file" },
-            icon,
+            icon_cell,
             url_path,
             html_escape(&entry.name),
+            entry.size,
             size_str,
             html_escape(&entry.description),
+            entry.mtime,
             mtime_str,
         ));
+
+        // Grid view item (for image files)
+        if !entry.is_dir {
+            let full_path = root.join(&entry.rel_path);
+            if is_image_file(&full_path) {
+                grid_items.push_str(&format!(
+                    r#"<div class="grid-item"><a href="/{}"><img class="thumb" src="/{}?thumb=1" alt="{}" loading="lazy"><div class="info"><div class="name">{}</div><div class="meta">{} · {}</div></div></a></div>"#,
+                    url_path, url_path, html_escape(&entry.name), html_escape(&entry.name), size_str, html_escape(&entry.description),
+                ));
+            }
+        }
     }
 
     // Summary
@@ -294,13 +346,39 @@ fn serve_directory_listing(dir: &Path, root: &Path) -> String {
         )
     };
 
+    let view_toggle = if has_images {
+        r#"<div class="view-toggle"><button class="view-btn active" data-view="table">📋 Table</button><button class="view-btn" data-view="grid">🔲 Grid</button></div>"#.to_string()
+    } else {
+        String::new()
+    };
+
+    let grid_section = if has_images {
+        format!(r#"<div class="grid-container">{}</div>"#, grid_items)
+    } else {
+        String::new()
+    };
+
     let body = format!(
         r#"<div class="breadcrumbs">{}</div>
-<div class="summary">{}</div>
+<div class="toolbar">
+    <div class="summary">{}</div>
+    <div class="search-wrapper">
+        <span class="search-icon">🔍</span>
+        <input class="search-bar" id="search" placeholder="Filter files…" autofocus>
+    </div>
+    {}
+</div>
 <table>
-<tr><th></th><th>Name</th><th>Size</th><th>Type</th><th>Modified</th></tr>
-{}</table>"#,
-        breadcrumbs, summary, rows,
+<thead>
+<tr><th></th><th data-col="name">Name <span class="sort-arrow"></span></th><th data-col="size">Size <span class="sort-arrow"></span></th><th data-col="type">Type <span class="sort-arrow"></span></th><th data-col="date">Modified <span class="sort-arrow"></span></th></tr>
+</thead>
+<tbody>
+{}
+</tbody>
+</table>
+{}
+<div class="msg hidden"><h2>🔍 No matches</h2><p>Try a different search term</p></div>"#,
+        breadcrumbs, summary, view_toggle, rows, grid_section,
     );
 
     render_page(&title, &body)
@@ -316,19 +394,37 @@ fn serve_file(path: &Path) -> String {
             } else {
                 detect_kind(&data, path)
             };
-            let html = cat_html::cat_file_html(&data, kind, path);
 
-            format!(
-                "HTTP/1.1 200 OK\r\n\
-                 Content-Type: text/html; charset=utf-8\r\n\
-                 Content-Length: {}\r\n\
-                 Access-Control-Allow-Origin: *\r\n\
-                 Cache-Control: no-cache\r\n\
-                 \r\n\
-                 {}",
-                html.len(),
-                html
-            )
+            // For images and media, serve raw bytes with proper Content-Type
+            match kind {
+                FileKind::Image => {
+                    let mime = mime_for_image(path);
+                    media_response(&data, mime, path)
+                }
+                _ => {
+                    let html = cat_html::cat_file_html(&data, kind, path);
+
+                    // Add copy and watch buttons before the first code block
+                    let rel_path = path.to_string_lossy();
+                    let actions_html = format!(
+                        r#"<div class="file-actions"><button class="watch-btn" id="watchBtn" data-path="{}">🔴 Watch</button><button class="theme-btn" id="copyBtn">📋 Copy</button></div>"#,
+                        html_escape(&rel_path)
+                    );
+                    let html = html.replace("<pre", &format!("{}<pre", actions_html));
+
+                    format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: text/html; charset=utf-8\r\n\
+                         Content-Length: {}\r\n\
+                         Access-Control-Allow-Origin: *\r\n\
+                         Cache-Control: no-cache\r\n\
+                         \r\n\
+                         {}",
+                        html.len(),
+                        html
+                    )
+                }
+            }
         }
         Err(e) => {
             let body = format!(
@@ -365,7 +461,7 @@ fn serve_from_roots(request_path: &str, roots: &[RootEntry]) -> String {
     }
 
     // Try filename matching
-    for (i, root) in roots.iter().enumerate() {
+    for (_i, root) in roots.iter().enumerate() {
         let path_str = match root {
             RootEntry::File(p) => p.clone(),
             RootEntry::Dir(p) => p.to_string_lossy().to_string(),
@@ -394,6 +490,133 @@ fn serve_from_roots(request_path: &str, roots: &[RootEntry]) -> String {
     }
 
     not_found_response(request_path)
+}
+
+// ── SSE file watching ──
+
+/// Handle a Server-Sent Events connection for live file watching.
+/// Polls the file's modification time every 500ms and sends a 'refresh'
+/// event when the file changes.
+fn handle_sse_watch(mut stream: TcpStream, watch_path: &str, state: &ServeState) -> std::io::Result<()> {
+    // Resolve the watch path relative to the root
+    let resolved = match &state.roots[..] {
+        [RootEntry::Dir(root)] => {
+            let clean = sanitize_path(watch_path);
+            root.join(&clean)
+        }
+        _ => {
+            // For multi-root, try to find the file
+            let path = Path::new(watch_path);
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir().unwrap_or_default().join(watch_path)
+            }
+        }
+    };
+
+    // Canonicalize for security
+    let target = match resolved.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Type: text/event-stream\r\n\r\nevent: error\ndata: File not found\n\n");
+            return Ok(());
+        }
+    };
+
+    if !target.is_file() {
+        let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/event-stream\r\n\r\nevent: error\ndata: Not a file\n\n");
+        return Ok(());
+    }
+
+    // Send SSE headers
+    let headers = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/event-stream\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: keep-alive\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         \r\n"
+    );
+    stream.write_all(headers.as_bytes())?;
+    stream.flush()?;
+
+    // Send initial connected event
+    let connected = "event: connected\ndata: ok\n\n";
+    stream.write_all(connected.as_bytes())?;
+    stream.flush()?;
+
+    // Poll for changes
+    let poll_interval = std::time::Duration::from_millis(500);
+    let mut last_mtime = target.metadata().ok().and_then(|m| m.modified().ok());
+    let mut last_size = target.metadata().ok().map(|m| m.len());
+
+    loop {
+        std::thread::sleep(poll_interval);
+
+        let meta = match target.metadata() {
+            Ok(m) => m,
+            Err(_) => {
+                // File deleted or inaccessible
+                let _ = stream.write_all(b"event: error\ndata: File lost\n\n");
+                let _ = stream.flush();
+                break;
+            }
+        };
+
+        let current_mtime = meta.modified().ok();
+        let current_size = Some(meta.len());
+
+        if current_mtime != last_mtime || current_size != last_size {
+            last_mtime = current_mtime;
+            last_size = current_size;
+
+            // Send refresh event
+            let event = format!("event: refresh\ndata: {}\n\n", 
+                current_mtime.map(|t| format!("{:?}", t)).unwrap_or_default()
+            );
+            if stream.write_all(event.as_bytes()).is_err() {
+                break; // Client disconnected
+            }
+            if stream.flush().is_err() {
+                break;
+            }
+        }
+
+        // Check if stream is still writable (client didn't disconnect)
+        // We detect this by checking write readiness via a non-blocking write of empty
+        let buf = [0u8; 0];
+        if stream.write(&buf).is_err() {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// Simple URL percent-decoding (enough for file paths).
+fn urlencoding_decode(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+            // If decoding fails, keep the % as-is
+            result.push('%');
+            result.push_str(&hex);
+        } else if c == '+' {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 // ── Data types ──
@@ -495,7 +718,7 @@ fn breadcrumb_html(current: &Path, root: &Path) -> String {
     crumbs
 }
 
-fn breadcrumb_for_multi(roots: &[RootEntry], current_idx: usize) -> String {
+fn breadcrumb_for_multi(_roots: &[RootEntry], current_idx: usize) -> String {
     let mut crumbs = String::new();
     crumbs.push_str(r#"<a href="/">📁 ccat serve</a>"#);
     crumbs.push_str(&format!(
@@ -524,195 +747,816 @@ fn parent_url_path(dir: &Path, root: &Path) -> String {
 }
 
 fn render_page(title: &str, body: &str) -> String {
+    let escaped_title = html_escape(title);
+    let escaped_title_attr = title.replace('"', "&quot;").replace('&', "&amp;");
     let html = format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — ccat</title>
 <style>
+:root {{
+    /* Dark theme (default) */
+    --bg: #1a1b26;
+    --bg2: #24253a;
+    --surface: #1e1f33;
+    --border: #2d2e44;
+    --fg: #c0caf5;
+    --fg2: #a9b1d6;
+    --dim: #565f89;
+    --accent: #7aa2f7;
+    --accent2: #89ddff;
+    --green: #9ece6a;
+    --orange: #ff9e64;
+    --red: #f7768e;
+    --link: #7dcfff;
+    --header-bg: #1a1b26;
+    --header-border: #2d2e44;
+    --search-bg: #1e1f33;
+    --hover: #2a2b41;
+    --table-header: #24253a;
+    --table-border: #2d2e44;
+    --scrollbar: #2d2e44;
+    --scrollbar-hover: #3d3e5c;
+    --code-bg: #1a1b26;
+    --code-border: #2d2e44;
+    --badge-bg: #24253a;
+    --badge-height: 32px;
+}}
+
+[data-theme="light"] {{
+    --bg: #f5f5f9;
+    --bg2: #e8e8f0;
+    --surface: #ffffff;
+    --border: #d0d0da;
+    --fg: #1a1b26;
+    --fg2: #3b3c4e;
+    --dim: #8888a0;
+    --accent: #2e7de9;
+    --accent2: #0099cc;
+    --green: #2ea043;
+    --orange: #d96c00;
+    --red: #d02939;
+    --link: #2e7de9;
+    --header-bg: #ffffff;
+    --header-border: #d0d0da;
+    --search-bg: #ffffff;
+    --hover: #e8e8f0;
+    --table-header: #ededf4;
+    --table-border: #d0d0da;
+    --scrollbar: #d0d0da;
+    --scrollbar-hover: #b0b0c0;
+    --code-bg: #f5f5f9;
+    --code-border: #d0d0da;
+    --badge-bg: #e8e8f0;
+}}
+
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+html {{ scroll-behavior: smooth; }}
 body {{
-    background: #2b303b;
-    color: #c0c5ce;
-    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.6;
     padding: 0;
     margin: 0;
     min-height: 100vh;
 }}
+body {{ font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }}
+::selection {{ background: var(--accent); color: #fff; }}
+::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+::-webkit-scrollbar-track {{ background: var(--bg); }}
+::-webkit-scrollbar-thumb {{ background: var(--scrollbar); border-radius: 4px; }}
+::-webkit-scrollbar-thumb:hover {{ background: var(--scrollbar-hover); }}
+
+/* ── Header ── */
 .header {{
     position: sticky;
     top: 0;
-    z-index: 10;
-    background: #1f2229;
-    border-bottom: 1px solid #37404a;
-    padding: 12px 24px;
+    z-index: 100;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--header-border);
+    padding: 0 24px;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    height: 52px;
+    backdrop-filter: blur(8px);
 }}
 .header .title {{
-    font-size: 15px;
-    font-weight: bold;
-    color: #96b5b4;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }}
-.header .meta {{
-    font-size: 11px;
-    color: #65737e;
+.header .title svg {{ width: 18px; height: 18px; flex-shrink: 0; }}
+.header .meta {{ font-size: 11px; color: var(--dim); }}
+.header-actions {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }}
+
+/* ── Theme toggle ── */
+.theme-btn {{
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--dim);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px 8px;
+    line-height: 1;
+    transition: all 0.15s;
+}}
+.theme-btn:hover {{ color: var(--fg); border-color: var(--accent); }}
+
+/* ── Live watch button ── */
+.watch-btn {{
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--dim);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 10px;
+    line-height: 1;
+    transition: all 0.15s;
+}}
+.watch-btn:hover {{ color: var(--green); border-color: var(--green); }}
+.watch-btn.active {{ color: var(--green); border-color: var(--green); background: rgba(158,206,106,0.08); }}
+
+/* ── Content ── */
 .content {{
-    max-width: 1000px;
+    max-width: 1100px;
     margin: 0 auto;
-    padding: 16px 24px;
+    padding: 0 24px 40px;
 }}
+
+/* ── Breadcrumbs ── */
 .breadcrumbs {{
-    padding: 10px 0;
+    padding: 12px 0 8px;
     font-size: 13px;
-    color: #65737e;
-    border-bottom: 1px solid #37404a;
+    color: var(--dim);
     overflow-x: auto;
     white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
 }}
-.breadcrumbs a {{
-    color: #8fa1b3;
-    text-decoration: none;
-}}
-.breadcrumbs a:hover {{
-    color: #c0c5ce;
-    text-decoration: underline;
-}}
-.breadcrumbs .sep {{
-    margin: 0 4px;
-    color: #4f5b66;
+.breadcrumbs a {{ color: var(--link); text-decoration: none; }}
+.breadcrumbs a:hover {{ color: var(--accent); text-decoration: underline; }}
+.breadcrumbs .sep {{ margin: 0 6px; color: var(--dim); font-weight: 300; }}
+
+/* ── Summary bar ── */
+.toolbar {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0 12px;
+    flex-wrap: wrap;
 }}
 .summary {{
-    padding: 8px 0;
     font-size: 12px;
-    color: #65737e;
+    color: var(--dim);
 }}
+.search-wrapper {{
+    position: relative;
+    flex: 1;
+    max-width: 320px;
+    min-width: 160px;
+}}
+.search-wrapper .search-icon {{
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--dim);
+    font-size: 13px;
+    pointer-events: none;
+}}
+.search-bar {{
+    width: 100%;
+    padding: 7px 12px 7px 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--search-bg);
+    color: var(--fg);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+}}
+.search-bar:focus {{ border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122,162,247,0.15); }}
+.search-bar::placeholder {{ color: var(--dim); }}
+
+/* ── View toggle ── */
+.view-toggle {{
+    display: flex;
+    gap: 4px;
+}}
+.view-btn {{
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--dim);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 8px;
+    line-height: 1;
+    transition: all 0.15s;
+    font-family: inherit;
+}}
+.view-btn:hover {{ color: var(--fg); }}
+.view-btn.active {{ color: var(--accent); border-color: var(--accent); background: rgba(122,162,247,0.08); }}
+
+/* ── Table ── */
 table {{
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
 }}
-tr {{
-    border-bottom: 1px solid #1f2229;
-}}
-tr:hover {{
-    background: #22262f;
+thead {{
+    position: sticky;
+    top: 52px;
+    z-index: 10;
 }}
 th {{
     text-align: left;
-    padding: 6px 8px;
+    padding: 8px 10px;
     font-weight: 600;
-    color: #8fa1b3;
+    color: var(--dim);
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    border-bottom: 1px solid #37404a;
-    position: sticky;
-    top: 48px;
-    background: #2b303b;
-}}
-td {{
-    padding: 6px 8px;
+    border-bottom: 1px solid var(--table-border);
+    background: var(--table-header);
+    cursor: pointer;
+    user-select: none;
     white-space: nowrap;
 }}
-td.icon {{
-    width: 24px;
-    text-align: center;
-    font-size: 15px;
+th:hover {{ color: var(--fg); }}
+th.sorted {{ color: var(--accent); }}
+th .sort-arrow {{ margin-left: 4px; opacity: 0.5; }}
+tr {{ border-bottom: 1px solid var(--border); transition: background 0.1s; }}
+tr:hover {{ background: var(--hover); }}
+td {{
+    padding: 7px 10px;
+    white-space: nowrap;
+    vertical-align: middle;
 }}
-tr.file td:first-child {{ font-size: 14px; }}
-tr.dir td:first-child {{ font-size: 14px; }}
-td:last-child {{ width: 140px; }}
-td:nth-child(3) {{ width: 80px; text-align: right; font-variant-numeric: tabular-nums; }}
-td:nth-child(4) {{ width: 100px; }}
-a {{
-    color: #96b5b4;
-    text-decoration: none;
-}}
-a:hover {{
-    color: #c0c5ce;
-    text-decoration: underline;
-}}
-.dim {{
-    color: #4f5b66;
-    font-size: 12px;
-}}
-.date {{
-    color: #4f5b66;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-}}
-.search-bar {{
-    margin: 8px 0;
-    padding: 8px 12px;
-    width: 100%;
-    max-width: 400px;
-    border: 1px solid #37404a;
+td.icon {{ width: 28px; text-align: center; font-size: 16px; }}
+td:last-child {{ width: 150px; }}
+td:nth-child(3) {{ width: 90px; text-align: right; font-variant-numeric: tabular-nums; }}
+td:nth-child(4) {{ width: 110px; }}
+tr.file td:first-child {{ font-size: 15px; }}
+tr.dir td:first-child {{ font-size: 15px; }}
+a {{ color: var(--link); text-decoration: none; }}
+a:hover {{ color: var(--accent); text-decoration: underline; }}
+.dim {{ color: var(--dim); font-size: 12px; }}
+.date {{ color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }}
+.hidden {{ display: none !important; }}
+
+/* ── Image thumbnail in listing ── */
+.img-preview {{
+    display: inline-block;
+    width: 28px;
+    height: 28px;
     border-radius: 4px;
-    background: #1f2229;
-    color: #c0c5ce;
-    font-size: 13px;
-    outline: none;
+    overflow: hidden;
+    vertical-align: middle;
+    margin-right: 6px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
 }}
-.search-bar:focus {{
-    border-color: #8fa1b3;
+.img-preview img {{
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }}
-.hidden {{ display: none; }}
-.footer {{
-    text-align: center;
-    padding: 20px;
-    color: #4f5b66;
-    font-size: 11px;
-    border-top: 1px solid #37404a;
-    margin-top: 2em;
+
+/* ── Grid view for images ── */
+.grid-view table {{ display: none; }}
+.grid-view .grid-container {{ display: grid !important; }}
+.grid-container {{
+    display: none;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 16px;
+    padding: 16px 0;
 }}
+.grid-item {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: transform 0.15s, box-shadow 0.15s;
+}}
+.grid-item:hover {{ transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }}
+.grid-item a {{ display: block; text-decoration: none; color: inherit; }}
+.grid-item .thumb {{
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    display: block;
+    background: var(--bg2);
+}}
+.grid-item .info {{
+    padding: 8px 10px;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}}
+.grid-item .info .name {{ color: var(--fg); font-weight: 500; }}
+.grid-item .info .meta {{ color: var(--dim); font-size: 11px; }}
+
+/* ── Empty state ── */
 .msg {{
     text-align: center;
-    padding: 40px 20px;
-    color: #65737e;
+    padding: 60px 20px;
+    color: var(--dim);
 }}
-.msg h2 {{ color: #8fa1b3; margin-bottom: 8px; }}
+.msg h2 {{ color: var(--fg2); margin-bottom: 8px; font-weight: 500; }}
 .msg p {{ font-size: 13px; }}
+
+/* ── File view (code/markdown/text) ── */
+.file-view {{
+    padding: 0;
+}}
+.file-actions {{
+    display: flex;
+    gap: 8px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0;
+    flex-wrap: wrap;
+}}
+.file-actions button {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--dim);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 5px 12px;
+    font-family: inherit;
+    transition: all 0.15s;
+}}
+.file-actions button:hover {{ color: var(--fg); border-color: var(--accent); }}
+.file-actions button.copied {{ color: var(--green); border-color: var(--green); }}
+
+/* ── Code blocks ── */
+pre {{
+    padding: 16px 20px;
+    overflow-x: auto;
+    tab-size: 4;
+    -moz-tab-size: 4;
+    background: var(--code-bg) !important;
+    border-radius: 0;
+    margin: 0;
+}}
+pre code {{ counter-reset: line; }}
+pre code .line {{
+    display: block;
+    line-height: 1.6;
+    min-height: 1.2em;
+}}
+pre code .line::before {{
+    counter-increment: line;
+    content: counter(line);
+    display: inline-block;
+    width: 3em;
+    padding-right: 1.5em;
+    text-align: right;
+    color: var(--dim);
+    user-select: none;
+    opacity: 0.6;
+}}
+
+/* ── Markdown body ── */
+.markdown-body {{
+    padding: 24px 0;
+    max-width: 900px;
+    margin: 0 auto;
+}}
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {{
+    color: var(--fg);
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    font-weight: 600;
+}}
+.markdown-body h1 {{ font-size: 1.6em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }}
+.markdown-body h2 {{ font-size: 1.3em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }}
+.markdown-body h3 {{ font-size: 1.1em; }}
+.markdown-body p, .markdown-body li {{ line-height: 1.8; color: var(--fg2); }}
+.markdown-body a {{ color: var(--accent); text-decoration: underline; }}
+.markdown-body a:hover {{ color: var(--link); }}
+.markdown-body code {{
+    background: var(--bg2);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.9em;
+    color: var(--orange);
+}}
+.markdown-body pre code {{
+    background: none;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+}}
+.markdown-body pre {{
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    overflow-x: auto;
+}}
+.markdown-body blockquote {{
+    border-left: 3px solid var(--accent);
+    color: var(--dim);
+    padding-left: 14px;
+    margin: 1em 0;
+}}
+.markdown-body table {{
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+}}
+.markdown-body th, .markdown-body td {{
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+}}
+.markdown-body th {{ background: var(--table-header); color: var(--fg2); font-weight: 600; }}
+.markdown-body img {{ max-width: 100%; border-radius: 6px; }}
+
+/* ── Footer ── */
+.footer {{
+    text-align: center;
+    padding: 24px;
+    color: var(--dim);
+    font-size: 11px;
+    border-top: 1px solid var(--border);
+    margin-top: 2em;
+}}
+
+/* ── Keyboard hint ── */
+.kbd {{
+    display: inline-block;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-family: inherit;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--dim);
+    line-height: 1.4;
+}}
+
+/* ── Toast notification ── */
+.toast {{
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    opacity: 0;
+    transition: opacity 0.3s;
+    z-index: 200;
+    pointer-events: none;
+}}
+.toast.show {{ opacity: 1; }}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {{
+    .content {{ padding: 0 12px 24px; }}
+    .header {{ padding: 0 12px; }}
+    td:last-child {{ width: 100px; }}
+    td:nth-child(3) {{ width: 60px; }}
+    td:nth-child(4) {{ width: 80px; }}
+    .grid-container {{ grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }}
+}}
+
+/* ── SSE watching indicator ── */
+.watch-indicator {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--green);
+}}
+.watch-dot {{
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s infinite;
+}}
+@keyframes pulse {{
+    0%, 100% {{ opacity: 1; }}
+    50% {{ opacity: 0.3; }}
+}}
 </style>
 </head>
 <body>
 <div class="header">
-    <span class="title">{title}</span>
-    <span class="meta"><a href="/" style="color:#65737e;">ccat</a> file browser</span>
+    <div class="title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8"/><path d="M8 11h6"/><path d="M16 11h1"/><path d="M8 15h3"/></svg>
+        {escaped_title}
+    </div>
+    <div class="header-actions">
+        <span id="watchIndicator" class="watch-indicator hidden">
+            <span class="watch-dot"></span> watching
+        </span>
+        <button class="theme-btn" id="themeToggle" title="Toggle theme (Ctrl+Shift+T)">◐</button>
+    </div>
 </div>
 <div class="content">
-<div class="search-bar" id="search" placeholder="Filter files…" oninput="filterFiles(this.value)" autofocus>Filter files…</div>
-<script>
-function filterFiles(q) {{
-    let re = new RegExp(q.replace(/[.*+?^${{}}()|[\]\\\/]/g, '\\\\$&'), 'i');
-    document.querySelectorAll('tbody tr').forEach(function(r) {{
-        r.classList.toggle('hidden', q && !re.test(r.querySelector('td:nth-child(2)')?.textContent || ''));
-    }});
-    let visible = document.querySelectorAll('tbody tr:not(.hidden)').length;
-    document.querySelector('.msg').classList.toggle('hidden', visible > 0 || !q);
-}}
-document.getElementById('search').addEventListener('focus', function() {{ this.select(); }});
-</script>
-<table>
-<thead>
-<tr><th></th><th>Name</th><th>Size</th><th>Type</th><th>Modified</th></tr>
-</thead>
-<tbody>
 {body}
-</tbody>
-</table>
-<div class="msg hidden"><h2>🔍 No matches</h2><p>Try a different search term</p></div>
 </div>
-<div class="footer">Generated by <a href="https://github.com/ccat" style="color:#65737e;">ccat</a></div>
+<div id="toast" class="toast"></div>
+<script>
+(function() {{
+    // ── Theme system ──
+    const html = document.documentElement;
+    const themeBtn = document.getElementById('themeToggle');
+    const saved = localStorage.getItem('ccat-theme') || 'dark';
+    html.setAttribute('data-theme', saved);
+    themeBtn.textContent = saved === 'dark' ? '☀' : '☾';
+
+    themeBtn.addEventListener('click', function(e) {{
+        const current = html.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        html.setAttribute('data-theme', next);
+        localStorage.setItem('ccat-theme', next);
+        themeBtn.textContent = next === 'dark' ? '☀' : '☾';
+    }});
+
+    // Ctrl+Shift+T toggles theme
+    document.addEventListener('keydown', function(e) {{
+        if (e.ctrlKey && e.shiftKey && (e.key === 'T' || e.key === 't')) {{
+            e.preventDefault();
+            themeBtn.click();
+        }}
+    }});
+
+    // ── Keyboard shortcuts ──
+    // '/' to focus search, Escape to blur
+    document.addEventListener('keydown', function(e) {{
+        if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {{
+            e.preventDefault();
+            const search = document.querySelector('.search-bar');
+            if (search) {{ search.focus(); search.select(); }}
+        }}
+        if (e.key === 'Escape') {{
+            const search = document.querySelector('.search-bar');
+            if (search && document.activeElement === search) {{
+                search.blur();
+                search.value = '';
+                filterFiles('');
+            }}
+        }}
+        // j/k for navigating rows (only when not focused on input)
+        if (!['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {{
+            const rows = document.querySelectorAll('tbody tr:not(.hidden)');
+            if (rows.length === 0) return;
+            let currentIdx = -1;
+            rows.forEach((r, i) => {{
+                if (r.classList.contains('focused')) {{ currentIdx = i; }}
+            }});
+            if (e.key === 'j' || e.key === 'J') {{
+                e.preventDefault();
+                const next = Math.min(currentIdx + 1, rows.length - 1);
+                rows.forEach(r => r.classList.remove('focused'));
+                if (next >= 0) {{
+                    rows[next].classList.add('focused');
+                    rows[next].scrollIntoView({{ block: 'nearest' }});
+                }}
+            }}
+            if (e.key === 'k' || e.key === 'K') {{
+                e.preventDefault();
+                const prev = Math.max(currentIdx - 1, 0);
+                rows.forEach(r => r.classList.remove('focused'));
+                rows[prev].classList.add('focused');
+                rows[prev].scrollIntoView({{ block: 'nearest' }});
+            }}
+            if (e.key === 'Enter' && currentIdx >= 0) {{
+                const link = rows[currentIdx].querySelector('a');
+                if (link) {{ window.location.href = link.href; }}
+            }}
+        }}
+    }});
+
+    // ── Search / filter ──
+    window.filterFiles = function(q) {{
+        let visible = 0;
+        const searchInput = document.querySelector('.search-bar');
+        const grid = document.querySelector('.grid-container');
+        const table = document.querySelector('table');
+        const msg = document.querySelector('.msg');
+
+        if (!q) {{
+            // Show all
+            document.querySelectorAll('tbody tr').forEach(function(r) {{
+                r.classList.remove('hidden');
+                visible++;
+            }});
+            if (grid) {{
+                document.querySelectorAll('.grid-item').forEach(function(r) {{
+                    r.classList.remove('hidden');
+                }});
+            }}
+        }} else {{
+            let re;
+            try {{
+                re = new RegExp(q.replace(/[.*+?^${{}}()|[\\]\\\\\\/]/g, '\\\\$&'), 'i');
+            }} catch(e) {{
+                re = null;
+            }}
+            if (re) {{
+                document.querySelectorAll('tbody tr').forEach(function(r) {{
+                    const name = r.querySelector('td:nth-child(2)')?.textContent || '';
+                    const match = re.test(name);
+                    r.classList.toggle('hidden', !match);
+                    if (match) visible++;
+                }});
+                if (grid) {{
+                    document.querySelectorAll('.grid-item').forEach(function(r) {{
+                        const name = r.querySelector('.name')?.textContent || '';
+                        r.classList.toggle('hidden', !re.test(name));
+                    }});
+                }}
+            }}
+        }}
+        if (msg) {{
+            msg.classList.toggle('hidden', visible > 0 || !q);
+            if (visible === 0 && q) {{
+                const total = document.querySelectorAll('tbody tr').length;
+                msg.querySelector('h2').textContent = '🔍 No matches';
+                msg.querySelector('p').textContent = visible === 0 ? 'Try a different search term (' + total + ' items total)' : '';
+            }}
+        }}
+    }};
+
+    const searchInput = document.querySelector('.search-bar');
+    if (searchInput) {{
+        searchInput.addEventListener('input', function() {{
+            window.filterFiles(this.value);
+        }});
+        searchInput.addEventListener('focus', function() {{ this.select(); }});
+    }}
+
+    // ── Column sorting ──
+    document.querySelectorAll('th[data-col]').forEach(function(th) {{
+        th.addEventListener('click', function() {{
+            const col = this.dataset.col;
+            const table = this.closest('table');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            // Determine sort direction
+            const isAsc = this.classList.contains('sorted-asc');
+            document.querySelectorAll('th').forEach(t => {{
+                t.classList.remove('sorted', 'sorted-asc', 'sorted-desc');
+                const arrow = t.querySelector('.sort-arrow');
+                if (arrow) arrow.textContent = '';
+            }});
+            this.classList.add('sorted', isAsc ? 'sorted-desc' : 'sorted-asc');
+            const arrow = this.querySelector('.sort-arrow') || (() => {{
+                const s = document.createElement('span');
+                s.className = 'sort-arrow';
+                this.appendChild(s);
+                return s;
+            }})();
+            arrow.textContent = isAsc ? ' ▲' : ' ▼';
+
+            rows.sort(function(a, b) {{
+                let va, vb;
+                if (col === 'name') {{
+                    va = a.querySelector('td:nth-child(2)')?.textContent?.toLowerCase() || '';
+                    vb = b.querySelector('td:nth-child(2)')?.textContent?.toLowerCase() || '';
+                }} else if (col === 'size') {{
+                    va = parseFloat(a.querySelector('td:nth-child(3)')?.dataset.sort || '0');
+                    vb = parseFloat(b.querySelector('td:nth-child(3)')?.dataset.sort || '0');
+                }} else if (col === 'type') {{
+                    va = a.querySelector('td:nth-child(4)')?.textContent?.toLowerCase() || '';
+                    vb = b.querySelector('td:nth-child(4)')?.textContent?.toLowerCase() || '';
+                }} else if (col === 'date') {{
+                    va = a.querySelector('td:nth-child(5)')?.dataset.sort || '0';
+                    vb = b.querySelector('td:nth-child(5)')?.dataset.sort || '0';
+                }}
+                const cmp = typeof va === 'string' ? va.localeCompare(vb) : (va - vb);
+                return isAsc ? -cmp : cmp;
+            }});
+
+            rows.forEach(r => tbody.appendChild(r));
+        }});
+    }});
+
+    // ── Toast notification ──
+    window.showToast = function(msg) {{
+        const toast = document.getElementById('toast');
+        if (!toast) return;
+        toast.textContent = msg;
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 2000);
+    }};
+
+    // ── View toggle ──
+    document.querySelectorAll('.view-btn').forEach(function(btn) {{
+        btn.addEventListener('click', function() {{
+            document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            const view = this.dataset.view;
+            const container = document.querySelector('.content');
+            container.classList.toggle('grid-view', view === 'grid');
+            localStorage.setItem('ccat-view', view);
+        }});
+    }});
+    const savedView = localStorage.getItem('ccat-view');
+    if (savedView === 'grid') {{
+        const gbtn = document.querySelector('.view-btn[data-view="grid"]');
+        if (gbtn) gbtn.click();
+    }}
+
+    // ── Copy code button ──
+    const copyBtn = document.getElementById('copyBtn');
+    if (copyBtn) {{
+        copyBtn.addEventListener('click', function() {{
+            const code = document.querySelector('pre code');
+            if (!code) return;
+            const text = Array.from(code.querySelectorAll('.line')).map(l => l.textContent).join('\\n');
+            navigator.clipboard.writeText(text).then(function() {{
+                copyBtn.classList.add('copied');
+                copyBtn.textContent = '✓ Copied';
+                setTimeout(function() {{
+                    copyBtn.classList.remove('copied');
+                    copyBtn.textContent = '📋 Copy';
+                }}, 2000);
+            }}).catch(function() {{
+                showToast('Failed to copy');
+            }});
+        }});
+    }}
+
+    // ── Live watch via SSE ──
+    const watchBtn = document.getElementById('watchBtn');
+    const watchIndicator = document.getElementById('watchIndicator');
+    let eventSource = null;
+
+    if (watchBtn) {{
+        watchBtn.addEventListener('click', function() {{
+            if (eventSource) {{
+                eventSource.close();
+                eventSource = null;
+                watchBtn.classList.remove('active');
+                watchBtn.textContent = '🔴 Watch';
+                watchIndicator.classList.add('hidden');
+                return;
+            }}
+            const watchPath = watchBtn.dataset.path;
+            if (!watchPath) return;
+            watchBtn.textContent = '◌ Connecting…';
+            eventSource = new EventSource('/__watch__?path=' + encodeURIComponent(watchPath));
+            eventSource.onopen = function() {{
+                watchBtn.classList.add('active');
+                watchBtn.textContent = '⏹ Stop';
+                watchIndicator.classList.remove('hidden');
+            }};
+            eventSource.addEventListener('refresh', function() {{
+                showToast('🔃 File changed, reloading…');
+                setTimeout(function() {{ window.location.reload(); }}, 500);
+            }});
+            eventSource.onerror = function() {{
+                if (eventSource) {{
+                    eventSource.close();
+                    eventSource = null;
+                    watchBtn.classList.remove('active');
+                    watchBtn.textContent = '🔴 Watch';
+                    watchIndicator.classList.add('hidden');
+                    showToast('Watch connection lost');
+                }}
+            }};
+        }});
+    }}
+}})();
+</script>
 </body>
 </html>"#,
-        title = html_escape(title),
+        title = escaped_title_attr,
+        escaped_title = escaped_title,
         body = body,
     );
     format!(
@@ -723,6 +1567,49 @@ document.getElementById('search').addEventListener('focus', function() {{ this.s
          {}",
         html.len(),
         html
+    )
+}
+
+fn media_response(data: &[u8], mime: &str, path: &Path) -> String {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {}\r\n\
+         Content-Disposition: inline; filename=\"{}\"\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-cache\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         \r\n",
+        mime,
+        name,
+        data.len(),
+    )
+}
+
+fn mime_for_image(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        "tiff" | "tif" => "image/tiff",
+        _ => "application/octet-stream",
+    }
+}
+
+fn is_image_file(path: &Path) -> bool {
+    let mime = mime_for_image(path);
+    mime.starts_with("image/")
+}
+
+fn file_thumbnail_html(_path: &Path, rel_path: &str) -> String {
+    let url_path = url_encode_path(rel_path);
+    format!(
+        r#"<a href="/{}" class="img-preview"><img src="/{}?thumb=1" alt="" loading="lazy"></a>"#,
+        url_path, url_path
     )
 }
 
@@ -992,7 +1879,7 @@ fn format_timestamp() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let secs = dur.as_secs();
-    let days = secs / 86400;
+    let _days = secs / 86400;
     let time_secs = secs % 86400;
     let hours = time_secs / 3600;
     let minutes = (time_secs % 3600) / 60;

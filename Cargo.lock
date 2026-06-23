@@ -377,6 +377,7 @@ dependencies = [
  "syntect",
  "tar",
  "temp-env",
+ "tempfile",
  "termcolor",
  "toml",
  "viuer",

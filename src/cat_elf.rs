@@ -245,7 +245,7 @@ fn parse_raw_elf(data: &[u8]) -> Option<RawElfHeader> {
         let endian = header.endian().ok()?;
         let e_type = header.e_type(endian);
         let e_machine = header.e_machine(endian);
-        let entry: u64 = header.e_entry(endian).into();
+        let _entry: u64 = header.e_entry(endian).into();
         let phoff: u64 = header.e_phoff(endian).into();
         let phnum = header.e_phnum(endian) as usize;
         let phentsize = header.e_phentsize(endian) as usize;

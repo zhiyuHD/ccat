@@ -1,6 +1,6 @@
 [package]
 name = "ccat"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2024"
 
 [dependencies]
@@ -79,3 +79,4 @@ qrcode = "0.14"
 
 [dev-dependencies]
 syntect = "5"
+tempfile = "3"

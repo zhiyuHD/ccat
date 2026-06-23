@@ -9,7 +9,7 @@
 use flate2::read::GzDecoder;
 use std::collections::HashSet;
 use std::fs;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 // ── Constants ──
@@ -409,7 +409,7 @@ fn resolve_packed_object(git_dir: &Path, sha: &str) -> Option<GitObject> {
                     let crc_start = sha_start + num_entries * 20;
                     let crc_offset = crc_start + i * 4;
                     if crc_offset + 4 <= idx_data.len() {
-                        let crc = u32::from_be_bytes([
+                        let _crc = u32::from_be_bytes([
                             idx_data[crc_offset],
                             idx_data[crc_offset + 1],
                             idx_data[crc_offset + 2],
@@ -442,7 +442,7 @@ fn resolve_packed_object(git_dir: &Path, sha: &str) -> Option<GitObject> {
 
     // Read object header (variable-length encoding)
     let mut obj_type_num = 0;
-    let mut size = 0usize;
+    let mut _size = 0usize;
     let mut shift = 0;
     let mut first_byte = true;
 
@@ -455,7 +455,7 @@ fn resolve_packed_object(git_dir: &Path, sha: &str) -> Option<GitObject> {
             first_byte = false;
         }
 
-        size |= ((byte & 0x7f) as usize) << shift;
+        _size |= ((byte & 0x7f) as usize) << shift;
         shift += 7;
 
         if (byte & 0x80) == 0 {
@@ -815,7 +815,7 @@ fn display_tag(obj: &GitObject, sha: &str) {
             }
             if let Some(rest) = line.strip_prefix("object ") {
                 tagged_sha = rest.trim().to_string();
-            } else if let Some(rest) = line.strip_prefix("type ") {
+            } else if let Some(_rest) = line.strip_prefix("type ") {
                 // blob, tree, commit, tag
             } else if let Some(rest) = line.strip_prefix("tag ") {
                 tag_name = rest.trim().to_string();
@@ -1039,7 +1039,7 @@ pub fn cat_git(opts: &GitOpts) {
                 } else {
                     eprintln!("ccat: ambiguous or missing object '{}'", input);
                 }
-            } else if let Some(sha) = resolve_ref(&git_dir, input) {
+            } else if let Some(_sha) = resolve_ref(&git_dir, input) {
                 // It's a ref name (branch, tag, HEAD)
                 if let Some((obj, resolved_sha)) = read_git_object(&git_dir, input) {
                     display_git_object(&obj, &resolved_sha, opts.show_stat);

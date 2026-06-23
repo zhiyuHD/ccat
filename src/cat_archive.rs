@@ -123,7 +123,6 @@ fn list_zip_detail(data: &[u8], path: &str, file_arg: Option<&str>) {
                             }
                         }
                         if name == target_file || found {
-                            found = true;
                             let size = member.size();
                             let comp_size = member.compressed_size();
                             let content_type = classify_by_extension(name.as_str());
@@ -333,7 +332,7 @@ fn list_tar_detail(data: &[u8], path: &str, file_arg: Option<&str>) {
         }
     }
 
-    let mut total_entries = entry_list.len() as u64;
+    let total_entries = entry_list.len() as u64;
     let mut total_size: u64 = 0;
     let mut dirs = 0u64;
     let mut executables = 0u64;

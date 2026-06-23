@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Write};
 
 // ── Colour helpers (matching cat_oom convention) ──
 
