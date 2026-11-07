@@ -5,11 +5,15 @@
 /// theme selection for source highlighting.
 ///
 /// Detection priority:
-/// 1. `CCAT_COLOR_SCHEME=dark|light|auto` env var
-/// 2. `--color-scheme` CLI flag (set via [`force_theme`])
+/// 1. `--color-scheme` CLI flag (set via [`force_theme`])
+/// 2. `CCAT_COLOR_SCHEME=dark|light|auto` env var
 /// 3. `COLORFGBG` env var (rxvt, some terminals)
-/// 4. OSC 11 query (modern terminals, best effort)
+/// 4. `COLORTERM`, `ITERM_PROFILE`, `KONSOLE_PROFILE_NAME` hints
 /// 5. Default: Dark
+///
+/// Detection is purely environment based: ccat never writes a terminal escape
+/// sequence (such as an OSC 11 background query) before its actual output, so
+/// the first byte a caller sees is always real content.
 
 use std::sync::OnceLock;
 
@@ -51,7 +55,7 @@ pub fn active_theme() -> Theme {
     *AUTO_THEME.get_or_init(detect_from_env)
 }
 
-/// Detect theme from `CCAT_COLOR_SCHEME` env var, or `COLORFGBG`, or OSC 11.
+/// Detect theme from environment variables only (no terminal queries).
 fn detect_from_env() -> Theme {
     // 1. Explicit env var
     if let Ok(val) = std::env::var("CCAT_COLOR_SCHEME") {
@@ -84,12 +88,7 @@ fn detect_from_env() -> Theme {
         }
     }
 
-    // 3. Try OSC 11 query — best effort, non-blocking
-    if let Some(theme) = detect_via_osc11() {
-        return theme;
-    }
-
-    // 4. COLORTERM hint — truecolor terminals usually use dark themes
+    // 3. COLORTERM hint — truecolor terminals usually use dark themes
     if let Ok(val) = std::env::var("COLORTERM") {
         let v = val.to_lowercase();
         // light-terminal or similar
@@ -98,7 +97,7 @@ fn detect_from_env() -> Theme {
         }
     }
 
-    // 5. TERM_PROGRAM (macOS iTerm2, Terminal.app)
+    // 4. TERM_PROGRAM (macOS iTerm2, Terminal.app)
     if let Ok(profile) = std::env::var("ITERM_PROFILE") {
         let p = profile.to_lowercase();
         if p.contains("light") || p.contains("solarized light") {
@@ -106,7 +105,7 @@ fn detect_from_env() -> Theme {
         }
     }
 
-    // 6. KDE Konsole
+    // 5. KDE Konsole
     if let Ok(profile) = std::env::var("KONSOLE_PROFILE_NAME") {
         let p = profile.to_lowercase();
         if p.contains("light") {
@@ -116,89 +115,6 @@ fn detect_from_env() -> Theme {
 
     // Default: dark
     Theme::Dark
-}
-
-/// Try OSC 11 query: `ESC ] 11 ; ? ST`
-/// Modern terminals (kitty, iTerm2, WezTerm, foot, ghostty, Windows Terminal,
-/// VSCode integrated) support this.
-fn detect_via_osc11() -> Option<Theme> {
-    // Only try on Unix terminals, skip if piped
-    if !atty::is(atty::Stream::Stdout) {
-        return None;
-    }
-
-    // Use a thread with timeout to avoid hanging the process.
-    // Write OSC 11 query: ESC ] 11 ; ? BEL
-    use std::io::{Read, Write};
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
-
-    let mut stdout = std::io::stdout();
-    let _ = write!(stdout, "\\x1b]11;?\\x07");
-    let _ = stdout.flush();
-
-    // Spawn a reader thread with a short lifespan
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut stdin = std::io::stdin();
-        let mut buf = [0u8; 64];
-        let mut total = 0;
-        loop {
-            match stdin.read(&mut buf[total..]) {
-                Ok(0) => break,
-                Ok(n) => {
-                    total += n;
-                    if buf[..total].contains(&0x07) || buf[..total].contains(&b'\x1b') {
-                        break;
-                    }
-                    if total >= buf.len() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        let _ = tx.send((buf, total));
-    });
-
-    // Wait up to 100ms for the thread to get a response
-    if let Ok((buf, total_read)) = rx.recv_timeout(Duration::from_millis(100)) {
-        if total_read > 0 {
-            let response = String::from_utf8_lossy(&buf[..total_read]);
-            if let Some(rgb_part) = response.split(';').nth(1) {
-                let rgb_str = rgb_part.trim_end_matches('\x07').trim();
-                if let Some(rgb) = rgb_str.strip_prefix("rgb:") {
-                    let parts: Vec<&str> = rgb.split('/').collect();
-                    if parts.len() == 3 {
-                        let r = parse_hex_channel(parts[0]);
-                        let g = parse_hex_channel(parts[1]);
-                        let b = parse_hex_channel(parts[2]);
-                        if let (Some(r), Some(g), Some(b)) = (r, g, b) {
-                            let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
-                            return Some(if lum > 150.0 { Theme::Light } else { Theme::Dark });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Parse hex color channel (2 hex digits → 0-255) or (4 hex digits → 0-65535 → 0-255).
-fn parse_hex_channel(s: &str) -> Option<f64> {
-    let s = s.trim();
-    if s.len() == 4 {
-        // 4-digit format: xxxx (0-65535)
-        u16::from_str_radix(s, 16).ok().map(|v| v as f64 / 65535.0 * 255.0)
-    } else if s.len() == 2 || s.len() == 1 {
-        // 2-digit or 1-digit format
-        u8::from_str_radix(s, 16).ok().map(|v| v as f64)
-    } else {
-        None
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -372,27 +288,6 @@ mod tests {
         // Dark dim should be a dark-ish color (lower luminance components)
         // Light dim should be a light-gray-ish color
         assert_ne!(DARK.dim, LIGHT.dim);
-    }
-
-    #[test]
-    fn test_parse_hex_channel_2digit() {
-        assert_eq!(parse_hex_channel("FF"), Some(255.0));
-        assert_eq!(parse_hex_channel("00"), Some(0.0));
-        assert_eq!(parse_hex_channel("80"), Some(128.0));
-    }
-
-    #[test]
-    fn test_parse_hex_channel_4digit() {
-        let val = parse_hex_channel("FFFF").unwrap();
-        assert!((val - 255.0).abs() < 1.0);
-        let val = parse_hex_channel("8000").unwrap();
-        assert!((val - 128.0).abs() < 1.0);
-    }
-
-    #[test]
-    fn test_parse_hex_channel_invalid() {
-        assert!(parse_hex_channel("").is_none());
-        assert!(parse_hex_channel("GGG").is_none());
     }
 
     #[test]
